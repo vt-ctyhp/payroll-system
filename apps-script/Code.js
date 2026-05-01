@@ -28,16 +28,19 @@ const CONFIG = {
     schedules: 'Work Schedules',
     holidays: 'Holidays',
     events: 'Clock Events',
-    log: 'Attendance Log'
+    log: 'Attendance Log',
+    scorecard: 'Scorecard'
   },
   payrollTabs: {
     comp: 'Compensation Master',
     periods: 'Pay Periods',
     calculations: 'Payroll Calculations',
     output: 'Payroll Output',
-    lifecycle: 'Employee Lifecycle Log'
+    lifecycle: 'Employee Lifecycle Log',
+    paTracker: 'Quarterly PA Tracker'
   },
-  workflowInstructionsTab: '0. Workflow Instructions'
+  workflowInstructionsTab: '0. Workflow Instructions',
+  monthlyAttendanceBonusLateMinuteLimit: 90
 };
 
 const UI_THEME = {
@@ -158,6 +161,12 @@ const HEADERS = {
     'Short Hours Deduction',
     'Scheduled Base',
     'Total Deductions',
+    'Monthly Attendance Bonus',
+    'Attendance Bonus Status',
+    'Attendance Bonus Notes',
+    'Quarterly PA Bonus',
+    'Quarterly PA Status',
+    'Quarterly PA Notes',
     'Calculated Total',
     'Status',
     'Notes'
@@ -173,6 +182,22 @@ const HEADERS = {
     'Approved By',
     'Final Payroll ID (if applicable)',
     'Notes'
+  ],
+  paTracker: [
+    'Employee Code',
+    'Employee',
+    'Quarter',
+    'Month 1',
+    'Month 1 Perfect?',
+    'Month 2',
+    'Month 2 Perfect?',
+    'Month 3',
+    'Month 3 Perfect?',
+    'Consecutive Perfect Months',
+    'Eligible?',
+    'Quarterly PA Bonus',
+    'Reason',
+    'Updated At'
   ]
 };
 
@@ -391,6 +416,8 @@ function addAttendanceMenu_() {
     .addItem('Edit Attendance Log Entry...', 'showEditAttendanceLogDialog')
     .addItem('Rebuild Attendance Log', 'rebuildAttendanceLogFromMenu')
     .addSeparator()
+    .addItem('View Scorecard...', 'showScorecardDialog')
+    .addSeparator()
     .addItem('Add New Employee...', 'showAddEmployeeDialog')
     .addSeparator()
     .addItem('About / Help', 'showAboutHelp')
@@ -405,6 +432,7 @@ function addPayrollMenu_() {
     .addSeparator()
     .addItem('Calculate Pay Period...', 'showCalculatePayPeriodDialog')
     .addItem('Refresh Attendance Data', 'refreshAttendanceDataFromMenu')
+    .addItem('Refresh Quarterly PA Tracker', 'refreshQuarterlyPaTrackerFromMenu')
     .addItem('Finalize & Mark as Paid', 'markSelectedPayPeriodPaidFromMenu')
     .addSeparator()
     .addItem('Add New Employee...', 'showAddEmployeeDialog')
@@ -470,6 +498,11 @@ function showCalculatePayPeriodDialog() {
   SpreadsheetApp.getUi().showModalDialog(html, 'Calculate Pay Period');
 }
 
+function showScorecardDialog() {
+  const html = HtmlService.createHtmlOutputFromFile('ScorecardDialog').setWidth(920).setHeight(760);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Attendance Scorecard');
+}
+
 function rebuildAttendanceLogFromMenu() {
   const result = rebuildAttendanceLog();
   SpreadsheetApp.getUi().alert('Attendance Log rebuilt', `${result.rowsWritten} rows written for ${result.startDate} through ${result.endDate}.`, SpreadsheetApp.getUi().ButtonSet.OK);
@@ -478,6 +511,11 @@ function rebuildAttendanceLogFromMenu() {
 function refreshAttendanceDataFromMenu() {
   const result = rebuildAttendanceLog();
   SpreadsheetApp.getUi().alert('Attendance data refreshed', `${result.rowsWritten} attendance rows are ready for payroll calculations.`, SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+function refreshQuarterlyPaTrackerFromMenu() {
+  const result = refreshQuarterlyPaTracker();
+  SpreadsheetApp.getUi().alert('Quarterly PA Tracker refreshed', result.message, SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
 function markSelectedPayPeriodPaidFromMenu() {
@@ -732,6 +770,78 @@ function getCalculatePayPeriodDialogData() {
   };
 }
 
+function getScorecardDialogData() {
+  const attendance = requireAttendanceSpreadsheet_();
+  setupAttendanceSpreadsheet_(attendance);
+  return {
+    employees: listEmployeesForUi_(),
+    months: getAvailableScorecardMonths_(attendance),
+    defaultMonth: getDefaultScorecardMonth_(attendance)
+  };
+}
+
+function getEmployeeScorecard(payload) {
+  payload = payload || {};
+  const employeeCode = normalizeCode_(payload.employeeCode);
+  const monthKey = payload.month;
+  if (!employeeCode) throw new Error('Select an employee.');
+  if (!monthKey) throw new Error('Select a month.');
+
+  const attendance = requireAttendanceSpreadsheet_();
+  const month = getMonthWindow_(monthKey);
+  rebuildAttendanceLog({
+    startDate: formatDateKey_(month.start),
+    endDate: formatDateKey_(month.end)
+  });
+  const context = buildAttendanceSummaryContext_(attendance);
+  return buildMonthlyAttendanceSummary_(context, employeeCode, month.start);
+}
+
+function saveScorecardToSheet(payload) {
+  const scorecard = getEmployeeScorecard(payload);
+  const attendance = requireAttendanceSpreadsheet_();
+  writeScorecardSheet_(attendance, scorecard);
+  return {
+    message: `Scorecard tab updated for ${scorecard.employee.displayName} - ${scorecard.monthLabel}.`,
+    scorecard
+  };
+}
+
+function refreshQuarterlyPaTracker() {
+  const attendance = requireAttendanceSpreadsheet_();
+  const payroll = requirePayrollSpreadsheet_();
+  setupAttendanceSpreadsheet_(attendance);
+  setupPayrollSpreadsheet_(payroll);
+
+  const today = dateOnly_(new Date());
+  const quarterEndMonth = new Date(today.getFullYear(), Math.floor(today.getMonth() / 3) * 3 - 1, 1);
+  const monthStart = quarterEndMonth.getMonth() < 0
+    ? new Date(today.getFullYear() - 1, 11, 1)
+    : quarterEndMonth;
+  const quarterWindow = getQuarterWindowForMonth_(monthStart);
+  rebuildAttendanceLog({
+    startDate: formatDateKey_(quarterWindow.start),
+    endDate: formatDateKey_(quarterWindow.end)
+  });
+
+  const context = buildPayrollContext_(attendance, payroll, quarterWindow.start, quarterWindow.end);
+  const rows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees))
+    .filter(employee => employee.Status === 'Active' || employee.Status === '')
+    .map(employee => {
+      const code = normalizeCode_(employee['Employee Code']);
+      const comp = getCompForDate_(context.compRows, code, quarterWindow.end);
+      return buildQuarterlyPaResult_(code, quarterWindow.end, context, comp).trackerRow;
+    })
+    .filter(Boolean);
+
+  upsertQuarterlyPaTrackerRows_(getSheet_(payroll, CONFIG.payrollTabs.paTracker), rows);
+  applyPayrollFormatting_(payroll);
+  return {
+    rowsWritten: rows.length,
+    message: `${rows.length} employee quarter record(s) refreshed for ${getQuarterLabel_(quarterWindow.end)}.`
+  };
+}
+
 function calculatePayPeriod(payload) {
   payload = payload || {};
   const periodId = payload.periodId;
@@ -748,7 +858,11 @@ function calculatePayPeriod(payload) {
   const periodEnd = parseDateOrBlank_(period['Period End']);
   if (!periodStart || !periodEnd) throw new Error(`Pay period ${periodId} is missing start or end dates.`);
 
-  rebuildAttendanceLog({ startDate: formatDateKey_(periodStart), endDate: formatDateKey_(periodEnd) });
+  const attendanceWindow = getPayrollAttendanceWindow_(period);
+  rebuildAttendanceLog({
+    startDate: formatDateKey_(attendanceWindow.start),
+    endDate: formatDateKey_(attendanceWindow.end)
+  });
 
   const requestedCodes = (payload.employeeCodes || []).map(normalizeCode_).filter(Boolean);
   const activeEmployees = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees))
@@ -758,17 +872,20 @@ function calculatePayPeriod(payload) {
   const context = buildPayrollContext_(attendance, payroll, periodStart, periodEnd);
   const calculations = [];
   const outputRows = [];
+  const paTrackerRows = [];
   const warnings = [];
 
   employeeCodes.forEach(code => {
     const result = calculateEmployeePay_(code, period, context);
     calculations.push(result.calculationRow);
     outputRows.push(result.outputRow);
+    if (result.paTrackerRow) paTrackerRows.push(result.paTrackerRow);
     if (result.warning) warnings.push(result.warning);
   });
 
   writeRowsReplacingData_(getSheet_(payroll, CONFIG.payrollTabs.calculations), HEADERS.calculations, calculations);
   writeRowsReplacingData_(getSheet_(payroll, CONFIG.payrollTabs.output), HEADERS.output, outputRows);
+  upsertQuarterlyPaTrackerRows_(getSheet_(payroll, CONFIG.payrollTabs.paTracker), paTrackerRows);
   setPayPeriodStatus_(periodSheet, periodId, 'Calculated');
   applyPayrollFormatting_(payroll);
 
@@ -830,6 +947,7 @@ function setupAttendanceSpreadsheet_(ss) {
   ensureSheet_(ss, CONFIG.attendanceTabs.holidays, HEADERS.holidays);
   ensureSheet_(ss, CONFIG.attendanceTabs.events, HEADERS.events);
   ensureSheet_(ss, CONFIG.attendanceTabs.log, HEADERS.log);
+  ensureScorecardSheet_(ss);
   removeDefaultBlankSheet_(ss);
   applyAttendanceFormatting_(ss);
 }
@@ -840,6 +958,7 @@ function setupPayrollSpreadsheet_(ss) {
   ensureSheet_(ss, CONFIG.payrollTabs.calculations, HEADERS.calculations);
   ensureSheet_(ss, CONFIG.payrollTabs.output, HEADERS.output);
   ensureSheet_(ss, CONFIG.payrollTabs.lifecycle, HEADERS.lifecycle);
+  ensureSheet_(ss, CONFIG.payrollTabs.paTracker, HEADERS.paTracker);
   seedPayPeriods_(ss, new Date().getFullYear());
   removeDefaultBlankSheet_(ss);
   applyPayrollFormatting_(ss);
@@ -895,6 +1014,508 @@ function seedInitialEmployees_() {
   appendRows_(compSheet, compRows);
   applyAttendanceFormatting_(attendance);
   applyPayrollFormatting_(payroll);
+}
+
+function ensureScorecardSheet_(ss) {
+  let sheet = ss.getSheetByName(CONFIG.attendanceTabs.scorecard);
+  if (!sheet) {
+    sheet = ss.insertSheet(CONFIG.attendanceTabs.scorecard);
+  }
+  const firstCell = sheet.getRange(1, 1).getValue();
+  if (!firstCell) {
+    writeScorecardPlaceholder_(sheet);
+  }
+  return sheet;
+}
+
+function writeScorecardPlaceholder_(sheet) {
+  prepareScorecardSheet_(sheet);
+  sheet.getRange(1, 1, 1, 6).merge().setValue('ATTENDANCE SCORECARD');
+  sheet.getRange(2, 1, 1, 6).merge().setValue('Open Attendance > View Scorecard to select an employee and month, then update this tab.');
+  sheet.getRange(5, 1, 1, 2).setValues([['Status', 'Waiting for scorecard selection']]);
+  formatScorecardSheet_(sheet);
+}
+
+function writeScorecardSheet_(attendance, scorecard) {
+  const sheet = ensureScorecardSheet_(attendance);
+  prepareScorecardSheet_(sheet);
+
+  sheet.getRange(1, 1, 1, 6).merge().setValue(`ATTENDANCE SCORECARD - ${scorecard.monthLabel}`);
+  sheet.getRange(2, 1, 1, 6).merge().setValue(`${scorecard.employee.displayName} | ${scorecard.scheduleSummary}`);
+  sheet.getRange(4, 1, 1, 2).setValues([['Monthly Attendance Bonus', scorecard.bonus.status]]);
+  sheet.getRange(5, 1, 1, 6).merge().setValue(scorecard.bonus.reasons.join(' '));
+
+  const stats = [
+    ['Scheduled days', scorecard.stats.scheduledDays, 'Days worked', scorecard.stats.daysWorked, 'PTO used', scorecard.stats.ptoDays],
+    ['Disqualifying days', scorecard.stats.disqualifyingDays, 'Total late minutes', scorecard.stats.totalLateMinutes, 'Missing lunch logs', scorecard.stats.missingLunchDays],
+    ['Late clock-ins', `${scorecard.stats.lateClockInMinutes} min / ${scorecard.stats.lateClockInOccurrences}x`, 'Late lunch returns', `${scorecard.stats.lateLunchMinutes} min / ${scorecard.stats.lateLunchOccurrences}x`, 'Incomplete days', scorecard.stats.incompleteDays],
+    ['Average start', scorecard.stats.avgStartTime || '', 'Average end', scorecard.stats.avgEndTime || '', 'Perfect attendance', scorecard.perfectAttendance ? 'Yes' : 'No']
+  ];
+  sheet.getRange(8, 1, stats.length, 6).setValues(stats);
+
+  sheet.getRange(14, 1, 1, 6).merge().setValue('Top areas to focus on next month');
+  const focusRows = scorecard.focusAreas.map(item => [item, '', '', '', '', '']);
+  sheet.getRange(15, 1, focusRows.length, 6).setValues(focusRows);
+
+  sheet.getRange(15 + focusRows.length + 2, 1, 1, 6).merge().setValue('Exception days');
+  const start = 15 + focusRows.length + 3;
+  sheet.getRange(start, 1, 1, 6).setValues([['Date', 'Status', 'Clock In', 'Clock Out', 'Late Minutes', 'Notes']]);
+  const exceptionRows = scorecard.exceptionRows.length
+    ? scorecard.exceptionRows.map(row => [row.date, row.status, row.clockIn, row.clockOut, row.lateMinutes, row.notes])
+    : [['No exception days for this month.', '', '', '', '', '']];
+  sheet.getRange(start + 1, 1, exceptionRows.length, 6).setValues(exceptionRows);
+
+  formatScorecardSheet_(sheet);
+}
+
+function prepareScorecardSheet_(sheet) {
+  ensureMinimumSheetSize_(sheet, 80, 6);
+  try {
+    const filter = sheet.getFilter();
+    if (filter) filter.remove();
+  } catch (error) {
+    // Scorecard is a presentation surface, not a filterable table.
+  }
+  sheet.getDataRange().breakApart();
+  sheet.clear();
+  sheet.setConditionalFormatRules([]);
+  sheet.showColumns(1, sheet.getMaxColumns());
+  if (sheet.getMaxColumns() > 6) sheet.hideColumns(7, sheet.getMaxColumns() - 6);
+  try {
+    sheet.setHiddenGridlines(true);
+  } catch (error) {
+    // Sheet chrome is best-effort in Apps Script contexts.
+  }
+  sheet.setTabColor(UI_THEME.accent);
+}
+
+function formatScorecardSheet_(sheet) {
+  sheet.setTabColor(UI_THEME.accent);
+  sheet.setFrozenRows(3);
+  sheet.setColumnWidth(1, 170);
+  sheet.setColumnWidth(2, 120);
+  sheet.setColumnWidth(3, 170);
+  sheet.setColumnWidth(4, 120);
+  sheet.setColumnWidth(5, 170);
+  sheet.setColumnWidth(6, 240);
+  sheet.getRange(1, 1, sheet.getMaxRows(), 6)
+    .setBackground(UI_THEME.foundation)
+    .setFontFamily(UI_THEME.sans)
+    .setFontColor(UI_THEME.body)
+    .setFontSize(10)
+    .setWrap(true)
+    .setVerticalAlignment('top');
+  sheet.getRange(1, 1, 2, 6)
+    .setBackground(UI_THEME.ink)
+    .setFontColor(UI_THEME.card);
+  sheet.getRange(1, 1, 1, 6)
+    .setFontFamily(UI_THEME.serif)
+    .setFontSize(24)
+    .setFontWeight('bold');
+  sheet.getRange(2, 1, 1, 6)
+    .setFontColor(UI_THEME.inset)
+    .setFontSize(11);
+  sheet.getRange(4, 1, 2, 6)
+    .setBackground(UI_THEME.inset)
+    .setBorder(true, true, true, true, true, true, UI_THEME.rule, SpreadsheetApp.BorderStyle.SOLID);
+  sheet.getRange(4, 1, 1, 1)
+    .setFontWeight('bold')
+    .setFontColor(UI_THEME.muted);
+  sheet.getRange(4, 2, 1, 1)
+    .setFontFamily(UI_THEME.serif)
+    .setFontSize(18)
+    .setFontWeight('bold')
+    .setFontColor(UI_THEME.ink);
+  sheet.getRange(8, 1, 4, 6)
+    .setBackground(UI_THEME.card)
+    .setBorder(true, true, true, true, true, true, UI_THEME.rule, SpreadsheetApp.BorderStyle.SOLID);
+  sheet.getRange(14, 1, 1, 6)
+    .setFontFamily(UI_THEME.serif)
+    .setFontSize(18)
+    .setFontWeight('bold')
+    .setFontColor(UI_THEME.ink)
+    .setBorder(true, false, false, false, false, false, UI_THEME.accent, SpreadsheetApp.BorderStyle.SOLID);
+}
+
+function getAvailableScorecardMonths_(attendance) {
+  const monthKeys = new Set();
+  readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.events)).forEach(row => {
+    const timestamp = parseDateOrBlank_(row.Timestamp);
+    if (timestamp) monthKeys.add(formatMonthKey_(timestamp));
+  });
+  readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.log)).forEach(row => {
+    const date = parseDateOrBlank_(row.Date);
+    if (date) monthKeys.add(formatMonthKey_(date));
+  });
+  const today = new Date();
+  monthKeys.add(formatMonthKey_(today));
+  monthKeys.add(formatMonthKey_(new Date(today.getFullYear(), today.getMonth() - 1, 1)));
+  return Array.from(monthKeys)
+    .sort()
+    .reverse()
+    .slice(0, 24)
+    .map(key => {
+      const window = getMonthWindow_(key);
+      return { value: key, label: window.label };
+    });
+}
+
+function getDefaultScorecardMonth_(attendance) {
+  const months = getAvailableScorecardMonths_(attendance);
+  return months.length ? months[0].value : formatMonthKey_(new Date());
+}
+
+function buildAttendanceSummaryContext_(attendance) {
+  return {
+    attendance,
+    employees: mapByCode_(readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees))),
+    schedules: readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules)),
+    attendanceRows: readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.log))
+  };
+}
+
+function buildMonthlyAttendanceSummary_(context, employeeCode, monthStart) {
+  const code = normalizeCode_(employeeCode);
+  const month = getMonthWindow_(formatMonthKey_(monthStart));
+  const employee = context.employees[code];
+  if (!employee) throw new Error(`Employee ${code} was not found.`);
+
+  const rows = context.attendanceRows.filter(row => {
+    const rowDate = parseDateOrBlank_(row.Date);
+    return normalizeCode_(row['Employee Code']) === code
+      && rowDate
+      && rowDate.getTime() >= month.start.getTime()
+      && rowDate.getTime() <= month.end.getTime()
+      && row['Scheduled Start'];
+  });
+
+  const stats = {
+    scheduledDays: rows.length,
+    daysWorked: 0,
+    ptoDays: 0,
+    holidayDays: 0,
+    absentDays: 0,
+    utoDays: 0,
+    nonPtoDays: 0,
+    incompleteDays: 0,
+    disqualifyingDays: 0,
+    totalLateMinutes: 0,
+    lateClockInMinutes: 0,
+    lateClockInOccurrences: 0,
+    lateLunchMinutes: 0,
+    lateLunchOccurrences: 0,
+    lateStartOverFiveOccurrences: 0,
+    missingLunchDays: 0,
+    avgStartTime: '',
+    avgEndTime: ''
+  };
+  const startMinutes = [];
+  const endMinutes = [];
+  const exceptionRows = [];
+
+  rows.forEach(row => {
+    const date = parseDateOrBlank_(row.Date);
+    const status = row.Status || '';
+    const clockIn = parseDateOrBlank_(row['Clock In']);
+    const clockOut = parseDateOrBlank_(row['Clock Out']);
+    const scheduledStart = parseDateOrBlank_(row['Scheduled Start']);
+    const schedule = getScheduleForDate_(context.schedules, code, date);
+    const daySchedule = getDaySchedule_(schedule, date);
+    const lateMinutes = toNumberOrBlank_(row['Total Late Minutes']) === '' ? 0 : Number(row['Total Late Minutes']);
+    let lateClockIn = 0;
+    let lateLunch = 0;
+    let missingLunch = false;
+
+    if (clockIn && scheduledStart) {
+      lateClockIn = Math.max(0, Math.round((clockIn.getTime() - scheduledStart.getTime()) / 60000));
+      if (lateClockIn > 0) {
+        stats.lateClockInMinutes += lateClockIn;
+        stats.lateClockInOccurrences += 1;
+      }
+      if (lateClockIn > 5) stats.lateStartOverFiveOccurrences += 1;
+      startMinutes.push(minutesSinceMidnight_(clockIn));
+    }
+
+    if (clockOut) {
+      endMinutes.push(minutesSinceMidnight_(clockOut));
+    }
+
+    if (daySchedule.lunchStart !== '' && daySchedule.lunchEnd !== '') {
+      const lunchEnd = parseDateOrBlank_(row['Lunch End']);
+      const scheduledLunchEnd = makeDateAtHour_(date, daySchedule.lunchEnd);
+      if (status === 'Present' && clockIn && clockOut && (!row['Lunch Start'] || !row['Lunch End'])) {
+        missingLunch = true;
+        stats.missingLunchDays += 1;
+      }
+      if (lunchEnd && scheduledLunchEnd) {
+        lateLunch = Math.max(0, Math.round((lunchEnd.getTime() - scheduledLunchEnd.getTime()) / 60000));
+        if (lateLunch > 0) {
+          stats.lateLunchMinutes += lateLunch;
+          stats.lateLunchOccurrences += 1;
+        }
+      }
+    }
+
+    stats.totalLateMinutes += lateMinutes;
+    if (status === 'Present') stats.daysWorked += 1;
+    if (status === 'PTO') stats.ptoDays += 1;
+    if (status === 'Holiday') stats.holidayDays += 1;
+    if (status === 'Absent') stats.absentDays += 1;
+    if (status === 'UTO') stats.utoDays += 1;
+    if (status === 'Non-PTO') stats.nonPtoDays += 1;
+    if (status === 'Incomplete (no clock-out)') stats.incompleteDays += 1;
+
+    const notes = [];
+    if (lateClockIn) notes.push(`${lateClockIn} min late start`);
+    if (lateLunch) notes.push(`${lateLunch} min late lunch`);
+    if (missingLunch) notes.push('Missing lunch log');
+    if (isDisqualifyingAttendanceStatus_(status)) notes.push('Disqualifying status');
+    if (notes.length) {
+      exceptionRows.push({
+        date: formatDateKey_(date),
+        status,
+        clockIn: clockIn ? displayTime_(clockIn) : '',
+        clockOut: clockOut ? displayTime_(clockOut) : '',
+        lateMinutes,
+        notes: notes.join('; ')
+      });
+    }
+  });
+
+  stats.disqualifyingDays = stats.absentDays + stats.utoDays + stats.nonPtoDays + stats.incompleteDays;
+  stats.avgStartTime = startMinutes.length ? displayMinutesAsTime_(average_(startMinutes)) : '';
+  stats.avgEndTime = endMinutes.length ? displayMinutesAsTime_(average_(endMinutes)) : '';
+
+  const bonus = buildMonthlyBonusEligibility_(stats);
+  const perfectAttendance = stats.scheduledDays > 0
+    && stats.disqualifyingDays === 0
+    && stats.ptoDays === 0
+    && stats.totalLateMinutes === 0;
+
+  return {
+    employee: {
+      employeeCode: code,
+      displayName: employee['Display Name'] || employee['Full Name'] || code,
+      fullName: employee['Full Name'] || ''
+    },
+    month: month.key,
+    monthLabel: month.label,
+    scheduleSummary: buildScheduleSummary_(context.schedules, code, month.start),
+    bonus,
+    stats,
+    perfectAttendance,
+    focusAreas: buildScorecardFocusAreas_(stats, bonus),
+    exceptionRows,
+    generatedAt: Utilities.formatDate(new Date(), CONFIG.timezone, 'yyyy-MM-dd h:mm a')
+  };
+}
+
+function buildMonthlyBonusEligibility_(stats) {
+  const failures = [];
+  const positives = [];
+  const limit = CONFIG.monthlyAttendanceBonusLateMinuteLimit;
+
+  if (!stats.scheduledDays) failures.push('No scheduled days were found for this month.');
+  if (stats.disqualifyingDays) failures.push(`${stats.disqualifyingDays} disqualifying attendance day(s).`);
+  if (stats.totalLateMinutes > limit) failures.push(`${stats.totalLateMinutes} late minutes exceeds the ${limit}-minute limit.`);
+
+  if (!failures.length) {
+    positives.push(`${stats.scheduledDays} scheduled day(s) reviewed.`);
+    positives.push('No disqualifying absences.');
+    positives.push(`${stats.totalLateMinutes} late minutes (limit: ${limit}).`);
+  }
+
+  return {
+    eligible: failures.length === 0,
+    status: failures.length === 0 ? 'EARNED' : 'NOT EARNED',
+    reasons: failures.length ? failures : positives,
+    failureReasons: failures,
+    lateMinuteLimit: limit
+  };
+}
+
+function buildScorecardFocusAreas_(stats, bonus) {
+  const focus = [];
+  if (bonus.failureReasons.length) {
+    bonus.failureReasons.forEach(reason => focus.push(reason));
+  }
+  if (stats.missingLunchDays) focus.push(`Log lunch consistently (${stats.missingLunchDays} day(s) missing lunch logs).`);
+  if (stats.lateStartOverFiveOccurrences) focus.push(`Aim to clock in by scheduled start (${stats.lateStartOverFiveOccurrences} late start(s) over 5 minutes).`);
+  if (stats.lateLunchOccurrences) focus.push(`Return from lunch on schedule (${stats.lateLunchOccurrences} late lunch return(s)).`);
+  if (!focus.length) focus.push('Maintain the same attendance pattern next month.');
+  return focus;
+}
+
+function isDisqualifyingAttendanceStatus_(status) {
+  return ['Absent', 'UTO', 'Non-PTO', 'Incomplete (no clock-out)'].indexOf(status) !== -1;
+}
+
+function buildScheduleSummary_(schedules, employeeCode, monthStart) {
+  const schedule = getScheduleForDate_(schedules, employeeCode, monthStart);
+  if (!schedule) return 'No active schedule';
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const active = days.filter(day => schedule[`${day} Start`] !== '' && schedule[`${day} End`] !== '');
+  if (!active.length) return 'No scheduled days';
+  const firstDay = active[0];
+  return `${active.join(', ')} ${formatHour_(schedule[`${firstDay} Start`])}-${formatHour_(schedule[`${firstDay} End`])}`;
+}
+
+function getPayrollAttendanceWindow_(period) {
+  const periodStart = parseDateOrBlank_(period['Period Start']);
+  const periodEnd = parseDateOrBlank_(period['Period End']);
+  let start = dateOnly_(periodStart);
+  let end = dateOnly_(periodEnd);
+  const bonusMonth = getAttendanceBonusMonthForPeriod_(period);
+  if (bonusMonth) {
+    const bonusWindow = getMonthWindow_(formatMonthKey_(bonusMonth));
+    start = minDate_(start, bonusWindow.start);
+    end = maxDate_(end, bonusWindow.end);
+    if (isQuarterEndMonth_(bonusMonth)) {
+      const quarterWindow = getQuarterWindowForMonth_(bonusMonth);
+      start = minDate_(start, quarterWindow.start);
+      end = maxDate_(end, quarterWindow.end);
+    }
+  }
+  return { start, end };
+}
+
+function getAttendanceBonusMonthForPeriod_(period) {
+  const type = String(period['Period Type (Mid / EOM)'] || '').toLowerCase();
+  if (type !== 'mid') return null;
+  const periodStart = parseDateOrBlank_(period['Period Start']);
+  return periodStart ? new Date(periodStart.getFullYear(), periodStart.getMonth(), 1) : null;
+}
+
+function calculateMonthlyAttendanceBonus_(employeeCode, period, context, comp) {
+  const bonusMonth = getAttendanceBonusMonthForPeriod_(period);
+  if (!bonusMonth) {
+    return {
+      amount: '',
+      status: 'Not due',
+      notes: 'Monthly attendance bonus is evaluated on the Mid payroll after the month closes.',
+      summary: null
+    };
+  }
+
+  const summary = buildMonthlyAttendanceSummary_(context, employeeCode, bonusMonth);
+  const configuredAmount = comp ? toNumberOrBlank_(comp['Monthly Attendance Bonus']) : '';
+  if (!summary.bonus.eligible) {
+    return {
+      amount: 0,
+      status: 'Not earned',
+      notes: summary.bonus.reasons.join(' '),
+      summary
+    };
+  }
+  if (configuredAmount === '') {
+    return {
+      amount: '',
+      status: 'Eligible - amount blank',
+      notes: 'Eligible for monthly attendance bonus, but Monthly Attendance Bonus is blank in Compensation Master.',
+      summary
+    };
+  }
+  return {
+    amount: round2_(configuredAmount),
+    status: 'Earned',
+    notes: summary.bonus.reasons.join(' '),
+    summary
+  };
+}
+
+function buildQuarterlyPaResult_(employeeCode, quarterEndMonth, context, comp) {
+  const code = normalizeCode_(employeeCode);
+  const employee = context.employees[code];
+  const quarterWindow = getQuarterWindowForMonth_(quarterEndMonth);
+  const monthStarts = [
+    quarterWindow.start,
+    addMonths_(quarterWindow.start, 1),
+    addMonths_(quarterWindow.start, 2)
+  ];
+  const summaries = monthStarts.map(monthStart => buildMonthlyAttendanceSummary_(context, code, monthStart));
+  const perfectCount = summaries.filter(summary => summary.perfectAttendance).length;
+  const eligible = perfectCount === 3;
+  const configuredAmount = comp ? toNumberOrBlank_(comp['Quarterly PA Bonus']) : '';
+  const quarterLabel = getQuarterLabel_(quarterWindow.end);
+  const reason = eligible
+    ? 'Three consecutive months of perfect attendance.'
+    : summaries.map(summary => `${summary.monthLabel}: ${summary.perfectAttendance ? 'Perfect' : summary.bonus.reasons.join(' ')}`).join(' | ');
+
+  let amount = eligible ? configuredAmount : 0;
+  let status = eligible ? 'Earned' : 'Not earned';
+  if (eligible && configuredAmount === '') {
+    amount = '';
+    status = 'Eligible - amount blank';
+  }
+
+  return {
+    amount: amount === '' ? '' : round2_(amount),
+    status,
+    notes: eligible && configuredAmount === ''
+      ? 'Eligible for quarterly PA bonus, but Quarterly PA Bonus is blank in Compensation Master.'
+      : reason,
+    trackerRow: [
+      code,
+      employee ? (employee['Display Name'] || employee['Full Name'] || code) : code,
+      quarterLabel,
+      summaries[0].monthLabel,
+      summaries[0].perfectAttendance ? 'Yes' : 'No',
+      summaries[1].monthLabel,
+      summaries[1].perfectAttendance ? 'Yes' : 'No',
+      summaries[2].monthLabel,
+      summaries[2].perfectAttendance ? 'Yes' : 'No',
+      perfectCount,
+      eligible ? 'Yes' : 'No',
+      amount === '' ? '' : round2_(amount),
+      reason,
+      new Date()
+    ]
+  };
+}
+
+function calculateQuarterlyPaBonus_(employeeCode, period, context, comp) {
+  const bonusMonth = getAttendanceBonusMonthForPeriod_(period);
+  if (!bonusMonth) {
+    return {
+      amount: '',
+      status: 'Not due',
+      notes: 'Quarterly PA bonus is evaluated after quarter-end months.',
+      trackerRow: null
+    };
+  }
+  if (!isQuarterEndMonth_(bonusMonth)) {
+    return {
+      amount: '',
+      status: 'Not due',
+      notes: 'Not a quarter-end attendance month.',
+      trackerRow: null
+    };
+  }
+  return buildQuarterlyPaResult_(employeeCode, bonusMonth, context, comp);
+}
+
+function upsertQuarterlyPaTrackerRows_(sheet, rows) {
+  if (!rows.length) return;
+  ensureSheet_(sheet.getParent(), sheet.getName(), HEADERS.paTracker);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0] || HEADERS.paTracker;
+  const codeIdx = headers.indexOf('Employee Code');
+  const quarterIdx = headers.indexOf('Quarter');
+  const existing = {};
+  for (let i = 1; i < values.length; i += 1) {
+    const key = `${normalizeCode_(values[i][codeIdx])}|${values[i][quarterIdx]}`;
+    existing[key] = i + 1;
+  }
+  const append = [];
+  rows.forEach(row => {
+    const key = `${normalizeCode_(row[0])}|${row[2]}`;
+    if (existing[key]) {
+      sheet.getRange(existing[key], 1, 1, HEADERS.paTracker.length).setValues([row]);
+    } else {
+      append.push(row);
+    }
+  });
+  appendRows_(sheet, append);
 }
 
 function ensurePhase1TestPins_(attendance) {
@@ -1046,7 +1667,7 @@ function buildWorkflowInstructionsSheet_(ss, workbookType) {
 
   const metaRows = [
     ['Workbook', guide.workbook, 'Primary owner', guide.owner, 'Best entry point', guide.entryPoint],
-    ['Before you begin', guide.beforeUse, 'Cadence', guide.cadence, 'Phase 1 scope', guide.scope]
+    ['Before you begin', guide.beforeUse, 'Cadence', guide.cadence, 'Current scope', guide.scope]
   ];
   sheet.getRange(row, 1, metaRows.length, 6).setValues(metaRows);
   row += metaRows.length + 2;
@@ -1193,7 +1814,7 @@ function formatWorkflowInstructionsSheet_(sheet, lastRow, workbookType) {
 
 function getAttendanceWorkflowGuide_() {
   return {
-    eyebrow: 'PHASE 1 OPERATING GUIDE',
+    eyebrow: 'PHASE 1-2 OPERATING GUIDE',
     title: 'Attendance Workflow Instructions',
     subtitle: 'Use this workbook to collect clock events, maintain schedules, and produce the reviewed attendance log that payroll consumes.',
     workbook: CONFIG.attendanceSpreadsheetName,
@@ -1201,7 +1822,7 @@ function getAttendanceWorkflowGuide_() {
     entryPoint: 'Attendance menu',
     beforeUse: 'Confirm employees, schedules, and web app access.',
     cadence: 'Daily review, pay-period closeout',
-    scope: 'Time capture, corrections, attendance status',
+    scope: 'Time capture, corrections, attendance status, scorecards',
     sections: [
       {
         eyebrow: 'SECTION 01',
@@ -1214,7 +1835,8 @@ function getAttendanceWorkflowGuide_() {
           ['3', 'Employee', 'Clock in, start lunch, end lunch, and clock out in sequence.', 'Clock-in web app', 'Each workday', 'Clock Events receives an append-only record for each action.'],
           ['4', 'Operations manager', 'Add missed or corrected punches without editing the audit trail directly.', 'Attendance menu', 'Same day when possible', 'Manual corrections show Source = MANUAL with useful notes.'],
           ['5', 'Operations manager', 'Rebuild the Attendance Log after corrections or before payroll.', 'Attendance menu', 'Daily and at closeout', 'Attendance Log shows status, hours, late minutes, and exceptions.'],
-          ['6', 'Payroll processor', 'Use the reviewed log as the source for pay-period calculation.', 'Payroll workbook', 'After closeout', 'Payroll Output is generated from the latest attendance data.']
+          ['6', 'Operations manager', 'Generate employee scorecards for the selected month.', 'Attendance menu', 'Monthly review', 'Scorecard shows only attendance data and is safe to share.'],
+          ['7', 'Payroll processor', 'Use the reviewed log as the source for pay-period calculation.', 'Payroll workbook', 'After closeout', 'Payroll Output is generated from the latest attendance data.']
         ]
       },
       {
@@ -1227,7 +1849,8 @@ function getAttendanceWorkflowGuide_() {
           ['Work Schedules', 'Effective-dated schedules by employee.', 'Operations manager', 'Yes', 'Effective From/To, day start/end, lunch window', 'Add a new row for schedule changes instead of overwriting history.'],
           ['Holidays', 'Paid holiday exceptions.', 'Operations manager', 'Yes', 'Date, Paid?, Applies To', 'Use All unless the holiday is employee-specific.'],
           ['Clock Events', 'Append-only clock event ledger.', 'Employees and managers', 'Append only', 'Timestamp, Employee Code, Event Type, Source', 'Do not delete production events; add a corrective manual event instead.'],
-          ['Attendance Log', 'Calculated daily status and payroll source.', 'Operations and payroll', 'Limited review', 'Status, Worked Hours, Late Minutes', 'Rebuild after source changes; override only PTO/UTO/Non-PTO/Holiday status.']
+          ['Attendance Log', 'Calculated daily status and payroll source.', 'Operations and payroll', 'Limited review', 'Status, Worked Hours, Late Minutes', 'Rebuild after source changes; override only PTO/UTO/Non-PTO/Holiday status.'],
+          ['Scorecard', 'Shareable one-employee attendance scorecard.', 'Operations manager', 'Script-rendered', 'Bonus status, stats, exception days', 'Use Attendance > View Scorecard to refresh this tab.']
         ]
       },
       {
@@ -1239,6 +1862,7 @@ function getAttendanceWorkflowGuide_() {
           ['Daily', 'Operations manager', 'Employees scheduled today have clock-in activity.', 'Clock Events', 'Add missing manual entries with notes.', 'Follow up with employee if the workday cannot be confirmed.'],
           ['Daily', 'Operations manager', 'Incomplete rows have a documented resolution path.', 'Attendance Log', 'Add missing clock-out or leave status unresolved for payroll review.', 'Payroll should not pay incomplete days without review.'],
           ['Weekly', 'Operations manager', 'New hires and resignations are reflected in roster dates.', 'Employees', 'Set Start Date, End Date, and Status.', 'Coordinate lifecycle notes in Payroll workbook.'],
+          ['Monthly', 'Operations manager', 'Scorecards explain bonus eligibility without showing pay data.', 'Attendance menu', 'Run View Scorecard.', 'Send only the scorecard, not payroll tabs.'],
           ['Pay close', 'Operations manager', 'Log is rebuilt for the full pay period.', 'Attendance menu', 'Run Rebuild Attendance Log.', 'Do not calculate payroll from a stale log.']
         ]
       },
@@ -1260,7 +1884,7 @@ function getAttendanceWorkflowGuide_() {
 
 function getPayrollWorkflowGuide_() {
   return {
-    eyebrow: 'PHASE 1 OPERATING GUIDE',
+    eyebrow: 'PHASE 1-2 OPERATING GUIDE',
     title: 'Payroll Workflow Instructions',
     subtitle: 'Use this workbook to maintain private compensation data, calculate the pay period, and produce the payroll output for review.',
     workbook: CONFIG.payrollSpreadsheetName,
@@ -1268,7 +1892,7 @@ function getPayrollWorkflowGuide_() {
     entryPoint: 'Payroll menu',
     beforeUse: 'Confirm attendance has been rebuilt and compensation is complete.',
     cadence: 'Mid-month and end-of-month payroll',
-    scope: 'Base pay, deductions, review output',
+    scope: 'Base pay, deductions, attendance bonus, PA tracking',
     sections: [
       {
         eyebrow: 'SECTION 01',
@@ -1280,8 +1904,9 @@ function getPayrollWorkflowGuide_() {
           ['2', 'Payroll processor', 'Review Compensation Master for blanks and effective dates.', 'Compensation Master', 'Before calculation', 'Every paid employee has an active compensation row.'],
           ['3', 'Payroll processor', 'Confirm or create the target pay period.', 'Pay Periods', 'Each run', 'Period ID, dates, type, and status are correct.'],
           ['4', 'Payroll processor', 'Calculate the pay period.', 'Payroll menu', 'Each run', 'Payroll Calculations and Payroll Output are refreshed.'],
-          ['5', 'Payroll approver', 'Review warnings, deductions, and Needs review rows.', 'Payroll Calculations', 'Before payment', 'Exceptions have notes or correction actions.'],
-          ['6', 'Payroll processor', 'Finalize after approval.', 'Payroll menu', 'After approval', 'Pay Period status is Paid and output is ready for export.']
+          ['5', 'Payroll approver', 'Review warnings, bonus statuses, deductions, and Needs review rows.', 'Payroll Calculations', 'Before payment', 'Exceptions have notes or correction actions.'],
+          ['6', 'Payroll processor', 'Refresh quarterly PA tracking after quarter-end payrolls.', 'Payroll menu', 'Quarter close', 'Quarterly PA Tracker shows eligible employees and reasons.'],
+          ['7', 'Payroll processor', 'Finalize after approval.', 'Payroll menu', 'After approval', 'Pay Period status is Paid and output is ready for export.']
         ]
       },
       {
@@ -1294,7 +1919,8 @@ function getPayrollWorkflowGuide_() {
           ['Pay Periods', 'Calendar and status control for pay runs.', 'Payroll processor', 'Yes', 'Period ID, Pay Date, Start/End, Status', 'Use one row per pay period and keep IDs stable.'],
           ['Payroll Calculations', 'Detailed calculated pay and deductions.', 'Payroll approver', 'Review only', 'Worked Hours, Deductions, Calculated Total', 'Investigate Needs review before payment.'],
           ['Payroll Output', 'Compact export-facing payroll summary.', 'Payroll processor', 'Review then export', 'Base, Deductions, TOTAL, Status', 'Export only after exceptions are cleared or approved.'],
-          ['Employee Lifecycle Log', 'Hire, termination, and reactivation audit.', 'Payroll and operations', 'Yes', 'Event Type, Event Date, Effective Date', 'Capture lifecycle decisions that affect payroll timing.']
+          ['Employee Lifecycle Log', 'Hire, termination, and reactivation audit.', 'Payroll and operations', 'Yes', 'Event Type, Event Date, Effective Date', 'Capture lifecycle decisions that affect payroll timing.'],
+          ['Quarterly PA Tracker', 'Three-month perfect-attendance tracking.', 'Payroll processor', 'Script-updated', 'Quarter, month status, eligibility, bonus', 'Refresh after quarter-end attendance is complete.']
         ]
       },
       {
@@ -1307,7 +1933,9 @@ function getPayrollWorkflowGuide_() {
           ['Incomplete attendance', 'Payroll Output', 'Status = Needs review', 'Clock-out is missing for a scheduled day.', 'Correct attendance, rebuild log, then recalculate.', 'Operations manager'],
           ['Absent deduction', 'Payroll Calculations', 'Absent Days > 0', 'Scheduled day has no clock-in.', 'Confirm absence classification before approval.', 'Payroll approver'],
           ['Late deduction', 'Payroll Calculations', 'Late Minutes > 0', 'Late start or late lunch return.', 'Review against policy and correct source events if needed.', 'Payroll approver'],
-          ['Short hours deduction', 'Payroll Calculations', 'Short Hours > 0', 'Worked hours are below eight for a scheduled day.', 'Confirm early leave, correction, or override path.', 'Payroll approver']
+          ['Short hours deduction', 'Payroll Calculations', 'Short Hours > 0', 'Worked hours are below eight for a scheduled day.', 'Confirm early leave, correction, or override path.', 'Payroll approver'],
+          ['Attendance bonus', 'Payroll Calculations', 'Attendance Bonus Status', 'Monthly eligibility is calculated after month close on Mid payrolls.', 'Review the status and notes before approving output.', 'Payroll approver'],
+          ['Quarterly PA bonus', 'Quarterly PA Tracker', 'Eligible? = No or amount blank', 'One or more months were not perfect, or bonus amount is blank.', 'Review quarter details and Compensation Master.', 'Payroll processor']
         ]
       },
       {
@@ -1367,6 +1995,8 @@ function installOpenTriggers_(spreadsheets) {
 
 function buildPayrollContext_(attendance, payroll, periodStart, periodEnd) {
   return {
+    attendance,
+    payroll,
     employees: mapByCode_(readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees))),
     schedules: readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules)),
     attendanceRows: readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.log)),
@@ -1446,12 +2076,18 @@ function calculateEmployeePay_(employeeCode, period, context) {
   const absenceDeduction = absentDays * 8 * hourlyBaseRate;
   const shortHoursDeduction = shortHours * hourlyBaseRate;
   const totalDeductions = lateDeduction + absenceDeduction + shortHoursDeduction;
+  const attendanceBonus = calculateMonthlyAttendanceBonus_(code, period, context, comp);
+  const quarterlyPaBonus = calculateQuarterlyPaBonus_(code, period, context, comp);
+  const attendanceBonusAmount = toNumberOrZero_(attendanceBonus.amount);
+  const quarterlyPaAmount = toNumberOrZero_(quarterlyPaBonus.amount);
   const canPay = incompleteDays === 0;
-  const total = canPay ? scheduledBase - totalDeductions : '';
+  const total = canPay ? scheduledBase - totalDeductions + attendanceBonusAmount + quarterlyPaAmount : '';
   const notes = [];
   if (absentDays) notes.push(`${absentDays} absent day(s).`);
   if (incompleteDays) notes.push(`${incompleteDays} incomplete day(s); verify clock events before payment.`);
   if (!scheduledDays) notes.push('No scheduled days in this pay period.');
+  if (attendanceBonus.status !== 'Not due') notes.push(`Attendance bonus ${attendanceBonus.status}: ${attendanceBonus.notes}`);
+  if (quarterlyPaBonus.status !== 'Not due') notes.push(`Quarterly PA ${quarterlyPaBonus.status}: ${quarterlyPaBonus.notes}`);
 
   const calculationRow = [
     period['Period ID'],
@@ -1473,6 +2109,12 @@ function calculateEmployeePay_(employeeCode, period, context) {
     round2_(shortHoursDeduction),
     round2_(scheduledBase),
     round2_(totalDeductions),
+    attendanceBonus.amount === '' ? '' : round2_(attendanceBonus.amount),
+    attendanceBonus.status,
+    attendanceBonus.notes,
+    quarterlyPaBonus.amount === '' ? '' : round2_(quarterlyPaBonus.amount),
+    quarterlyPaBonus.status,
+    quarterlyPaBonus.notes,
     total === '' ? '' : round2_(total),
     canPay ? 'Calculated' : 'Needs review',
     notes.join(' ')
@@ -1484,9 +2126,9 @@ function calculateEmployeePay_(employeeCode, period, context) {
     round2_(scheduledBase),
     round2_(totalDeductions),
     '',
+    attendanceBonus.amount === '' ? '' : round2_(attendanceBonus.amount),
     '',
-    '',
-    '',
+    quarterlyPaBonus.amount === '' ? '' : round2_(quarterlyPaBonus.amount),
     '',
     total === '' ? '' : round2_(total),
     canPay ? 'Calculated' : 'Needs review',
@@ -1496,6 +2138,7 @@ function calculateEmployeePay_(employeeCode, period, context) {
   return {
     calculationRow,
     outputRow,
+    paTrackerRow: quarterlyPaBonus.trackerRow,
     warning: notes.length ? `${employeeName}: ${notes.join(' ')}` : ''
   };
 }
@@ -1511,6 +2154,12 @@ function blankPayrollResult_(period, employeeCode, employeeName, status, note) {
       employeeName,
       periodStart || '',
       periodEnd || '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
       '',
       '',
       '',
@@ -1578,6 +2227,7 @@ function applyAttendanceFormatting_(ss) {
   setupSheetFormatting_(getSheet_(ss, CONFIG.attendanceTabs.holidays), HEADERS.holidays.length);
   setupSheetFormatting_(getSheet_(ss, CONFIG.attendanceTabs.events), HEADERS.events.length);
   setupSheetFormatting_(getSheet_(ss, CONFIG.attendanceTabs.log), HEADERS.log.length);
+  formatScorecardSheet_(getSheet_(ss, CONFIG.attendanceTabs.scorecard));
 
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.employees), 4, ['Active', 'Inactive', 'Resigned', 'Terminated']);
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.events), 4, CONFIG.eventTypes);
@@ -1598,6 +2248,7 @@ function applyPayrollFormatting_(ss) {
   setupSheetFormatting_(getSheet_(ss, CONFIG.payrollTabs.calculations), HEADERS.calculations.length);
   setupSheetFormatting_(getSheet_(ss, CONFIG.payrollTabs.output), HEADERS.output.length);
   setupSheetFormatting_(getSheet_(ss, CONFIG.payrollTabs.lifecycle), HEADERS.lifecycle.length);
+  setupSheetFormatting_(getSheet_(ss, CONFIG.payrollTabs.paTracker), HEADERS.paTracker.length);
 
   setValidation_(getSheet_(ss, CONFIG.payrollTabs.periods), 5, ['Mid', 'EOM']);
   setValidation_(getSheet_(ss, CONFIG.payrollTabs.periods), 6, ['Open', 'Calculated', 'Paid']);
@@ -1609,8 +2260,12 @@ function applyPayrollFormatting_(ss) {
   getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('M:M').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('O:O').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('Q:T').setNumberFormat('$#,##0.00');
+  getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('W:W').setNumberFormat('$#,##0.00');
+  getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('Z:Z').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.output).getRange('C:J').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.lifecycle).getRange('D:E').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
+  getSheet_(ss, CONFIG.payrollTabs.paTracker).getRange('L:L').setNumberFormat('$#,##0.00');
+  getSheet_(ss, CONFIG.payrollTabs.paTracker).getRange('N:N').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
   applySpreadsheetChrome_(ss, 'payroll');
 }
 
@@ -1618,7 +2273,7 @@ function applySpreadsheetChrome_(ss, workbookType) {
   const tabColor = workbookType === 'payroll' ? UI_THEME.ink : UI_THEME.accent;
   ss.getSheets().forEach(sheet => {
     sheet.setTabColor(tabColor);
-    if (sheet.getName() === CONFIG.workflowInstructionsTab) return;
+    if (sheet.getName() === CONFIG.workflowInstructionsTab || sheet.getName() === CONFIG.attendanceTabs.scorecard) return;
     const lastColumn = Math.max(sheet.getLastColumn(), 1);
     const lastRow = Math.max(sheet.getLastRow(), 1);
     sheet.getRange(1, 1, lastRow, lastColumn)
@@ -2182,6 +2837,11 @@ function toNumberOrBlank_(value) {
   return Number.isFinite(number) ? number : '';
 }
 
+function toNumberOrZero_(value) {
+  const number = toNumberOrBlank_(value);
+  return number === '' ? 0 : number;
+}
+
 function round2_(value) {
   if (value === '' || value === null || value === undefined) return '';
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
@@ -2235,6 +2895,87 @@ function displayDate_(value) {
   const date = parseDateOrBlank_(value);
   if (!date) return '';
   return Utilities.formatDate(date, CONFIG.timezone, 'yyyy-MM-dd');
+}
+
+function displayTime_(value) {
+  const date = parseDateOrBlank_(value);
+  if (!date) return '';
+  return Utilities.formatDate(date, CONFIG.timezone, 'h:mm a');
+}
+
+function formatMonthKey_(value) {
+  const date = parseDateOrBlank_(value);
+  if (!date) return '';
+  return Utilities.formatDate(date, CONFIG.timezone, 'yyyy-MM');
+}
+
+function getMonthWindow_(monthKey) {
+  const parts = String(monthKey || '').split('-');
+  const year = Number(parts[0]);
+  const month = Number(parts[1]) - 1;
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 0 || month > 11) {
+    throw new Error(`Invalid month: ${monthKey}`);
+  }
+  const start = new Date(year, month, 1);
+  const end = new Date(year, month + 1, 0);
+  return {
+    key: `${year}-${pad2_(month + 1)}`,
+    label: Utilities.formatDate(start, CONFIG.timezone, 'MMMM yyyy'),
+    start,
+    end
+  };
+}
+
+function addMonths_(date, months) {
+  return new Date(date.getFullYear(), date.getMonth() + months, 1);
+}
+
+function getQuarterWindowForMonth_(dateInQuarter) {
+  const date = parseDateOrBlank_(dateInQuarter);
+  const quarterStartMonth = Math.floor(date.getMonth() / 3) * 3;
+  const start = new Date(date.getFullYear(), quarterStartMonth, 1);
+  const end = new Date(date.getFullYear(), quarterStartMonth + 3, 0);
+  return { start, end };
+}
+
+function getQuarterLabel_(dateInQuarter) {
+  const date = parseDateOrBlank_(dateInQuarter);
+  const quarter = Math.floor(date.getMonth() / 3) + 1;
+  return `${date.getFullYear()} Q${quarter}`;
+}
+
+function isQuarterEndMonth_(date) {
+  const month = parseDateOrBlank_(date).getMonth();
+  return [2, 5, 8, 11].indexOf(month) !== -1;
+}
+
+function minDate_(a, b) {
+  return a.getTime() <= b.getTime() ? a : b;
+}
+
+function maxDate_(a, b) {
+  return a.getTime() >= b.getTime() ? a : b;
+}
+
+function minutesSinceMidnight_(date) {
+  return date.getHours() * 60 + date.getMinutes();
+}
+
+function displayMinutesAsTime_(minutes) {
+  const rounded = Math.round(minutes);
+  const hours = Math.floor(rounded / 60);
+  const mins = rounded % 60;
+  return Utilities.formatDate(new Date(2000, 0, 1, hours, mins), CONFIG.timezone, 'h:mm a');
+}
+
+function formatHour_(decimalHour) {
+  if (decimalHour === '' || decimalHour === null || decimalHour === undefined) return '';
+  return displayTime_(makeDateAtHour_(new Date(2000, 0, 1), Number(decimalHour)));
+}
+
+function average_(values) {
+  if (!values.length) return 0;
+  return values.reduce((sum, value) => sum + Number(value), 0) / values.length;
 }
 
 function pad2_(value) {

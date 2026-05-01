@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        color-scheme: light;
+        --bg-foundation: #F7F1EB;
+        --surface-card: #FBF7F1;
+        --surface-inset: #EFE8DD;
+        --ink-primary: #2A2725;
+        --ink-body: #4A4540;
+        --ink-muted: #8A8178;
+        --rule: #D4CFC4;
+        --accent: #E91D79;
+        --serif: 'Cormorant Garamond', Georgia, serif;
+        --sans: 'Inter', system-ui, -apple-system, sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg-foundation);
+        color: var(--ink-body);
+        font: 14px/1.5 var(--sans);
+        -webkit-font-smoothing: antialiased;
+      }
+      main {
+        padding: 28px;
+      }
+      .toolbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) auto;
+        gap: 18px;
+        align-items: end;
+        padding-bottom: 24px;
+        border-bottom: 1px solid var(--rule);
+      }
+      label,
+      .eyebrow,
+      button,
+      th,
+      .status {
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      label {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--ink-muted);
+      }
+      select {
+        width: 100%;
+        min-height: 40px;
+        border: 0;
+        border-bottom: 1px solid var(--rule);
+        border-radius: 0;
+        padding: 6px 2px;
+        background: transparent;
+        color: var(--ink-primary);
+        font: inherit;
+        font-size: 15px;
+        appearance: none;
+        -webkit-appearance: none;
+      }
+      select:focus {
+        outline: none;
+        border-bottom: 2px solid var(--accent);
+        padding-bottom: 5px;
+      }
+      button {
+        min-height: 42px;
+        padding: 0 18px;
+        border: 1px solid var(--ink-primary);
+        border-radius: 0;
+        background: transparent;
+        color: var(--ink-primary);
+        font-family: var(--sans);
+        cursor: pointer;
+      }
+      button:hover:not(:disabled),
+      button.primary {
+        background: var(--ink-primary);
+        color: var(--bg-foundation);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .scorecard {
+        margin-top: 26px;
+        background: var(--surface-card);
+        border: 1px solid var(--rule);
+      }
+      .masthead {
+        padding: 30px 34px;
+        background: var(--ink-primary);
+        color: var(--surface-card);
+      }
+      .eyebrow {
+        margin: 0;
+        color: var(--accent);
+      }
+      h1 {
+        margin: 6px 0 0;
+        color: var(--surface-card);
+        font-family: var(--serif);
+        font-size: 34px;
+        font-weight: 400;
+        line-height: 1.05;
+      }
+      .subtitle {
+        margin: 14px 0 0;
+        color: var(--surface-inset);
+      }
+      .content {
+        padding: 30px 34px 34px;
+      }
+      .bonus {
+        display: grid;
+        grid-template-columns: 220px minmax(0, 1fr);
+        gap: 24px;
+        padding-bottom: 26px;
+        border-bottom: 1px solid var(--rule);
+      }
+      .bonus-state {
+        font-family: var(--serif);
+        font-size: 34px;
+        line-height: 1;
+        color: var(--ink-primary);
+      }
+      .bonus-state.not-earned {
+        color: var(--accent);
+      }
+      ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+      li + li {
+        margin-top: 6px;
+      }
+      .section {
+        margin-top: 30px;
+      }
+      h2 {
+        margin: 0 0 14px;
+        color: var(--ink-primary);
+        font-family: var(--serif);
+        font-size: 22px;
+        font-weight: 400;
+      }
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        border-top: 1px solid var(--rule);
+        border-left: 1px solid var(--rule);
+      }
+      .stat {
+        min-height: 88px;
+        padding: 15px;
+        border-right: 1px solid var(--rule);
+        border-bottom: 1px solid var(--rule);
+        background: var(--bg-foundation);
+      }
+      .stat-label {
+        color: var(--ink-muted);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .stat-value {
+        margin-top: 8px;
+        color: var(--ink-primary);
+        font-family: var(--serif);
+        font-size: 26px;
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--bg-foundation);
+      }
+      th,
+      td {
+        padding: 11px 10px;
+        border: 1px solid var(--rule);
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: var(--ink-primary);
+        color: var(--surface-card);
+      }
+      td {
+        font-variant-numeric: tabular-nums;
+      }
+      .actions {
+        position: sticky;
+        bottom: 0;
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 28px -28px 0;
+        padding: 18px 28px;
+        border-top: 2px solid var(--accent);
+        background: var(--bg-foundation);
+      }
+      .button-row {
+        display: flex;
+        gap: 12px;
+      }
+      .status {
+        min-height: 18px;
+        margin: 16px 0 0;
+        color: var(--ink-muted);
+      }
+      .error {
+        color: var(--accent);
+      }
+      .loading {
+        padding: 34px;
+        background: var(--surface-inset);
+        color: var(--ink-muted);
+      }
+      @media print {
+        body { background: #fff; }
+        main { padding: 0; }
+        .toolbar,
+        .actions,
+        .status { display: none; }
+        .scorecard {
+          margin: 0;
+          border: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="toolbar">
+        <div>
+          <label for="employeeCode">Employee</label>
+          <select id="employeeCode"></select>
+        </div>
+        <div>
+          <label for="month">Month</label>
+          <select id="month"></select>
+        </div>
+        <button id="generateButton" class="primary" type="button" onclick="generateScorecard()">Generate</button>
+      </div>
+
+      <p id="status" class="status">Loading scorecard controls.</p>
+      <article id="scorecard" class="scorecard">
+        <div class="loading">Loading.</div>
+      </article>
+
+      <div class="actions">
+        <button type="button" onclick="google.script.host.close()">Close</button>
+        <div class="button-row">
+          <button id="sheetButton" type="button" onclick="updateSheetTab()" disabled>Update Sheet Tab</button>
+          <button id="printButton" type="button" onclick="window.print()" disabled>Print / PDF</button>
+          <button id="pngButton" type="button" onclick="exportPng()" disabled>Export PNG</button>
+        </div>
+      </div>
+    </main>
+
+    <script>
+      let latestPayload = null;
+      let latestScorecard = null;
+
+      function init() {
+        google.script.run
+          .withSuccessHandler(data => {
+            renderControls(data);
+            generateScorecard();
+          })
+          .withFailureHandler(showError)
+          .getScorecardDialogData();
+      }
+
+      function renderControls(data) {
+        document.getElementById('employeeCode').innerHTML = data.employees.map(employee => `
+          <option value="${escapeAttr(employee.employeeCode)}">${escapeHtml(employee.displayName)} (${escapeHtml(employee.employeeCode)})</option>
+        `).join('');
+        document.getElementById('month').innerHTML = data.months.map(month => `
+          <option value="${escapeAttr(month.value)}" ${month.value === data.defaultMonth ? 'selected' : ''}>${escapeHtml(month.label)}</option>
+        `).join('');
+      }
+
+      function generateScorecard() {
+        latestPayload = {
+          employeeCode: document.getElementById('employeeCode').value,
+          month: document.getElementById('month').value
+        };
+        setBusy(true);
+        setStatus('Building scorecard.');
+        google.script.run
+          .withSuccessHandler(scorecard => {
+            latestScorecard = scorecard;
+            renderScorecard(scorecard);
+            setStatus(`Generated ${scorecard.generatedAt}.`);
+            setBusy(false);
+          })
+          .withFailureHandler(error => {
+            showError(error);
+            setBusy(false);
+          })
+          .getEmployeeScorecard(latestPayload);
+      }
+
+      function renderScorecard(scorecard) {
+        const bonusClass = scorecard.bonus.eligible ? 'earned' : 'not-earned';
+        const exceptionRows = scorecard.exceptionRows.length
+          ? scorecard.exceptionRows.map(row => `
+            <tr>
+              <td>${escapeHtml(row.date)}</td>
+              <td>${escapeHtml(row.status)}</td>
+              <td>${escapeHtml(row.clockIn)}</td>
+              <td>${escapeHtml(row.clockOut)}</td>
+              <td>${escapeHtml(row.lateMinutes)}</td>
+              <td>${escapeHtml(row.notes)}</td>
+            </tr>
+          `).join('')
+          : '<tr><td colspan="6">No exception days for this month.</td></tr>';
+
+        document.getElementById('scorecard').innerHTML = `
+          <header class="masthead">
+            <p class="eyebrow">Attendance Scorecard</p>
+            <h1>${escapeHtml(scorecard.monthLabel)}</h1>
+            <p class="subtitle">Employee: ${escapeHtml(scorecard.employee.displayName)} | Schedule: ${escapeHtml(scorecard.scheduleSummary)}</p>
+          </header>
+          <div class="content">
+            <section class="bonus">
+              <div>
+                <div class="eyebrow">Monthly Attendance Bonus</div>
+                <div class="bonus-state ${bonusClass}">${escapeHtml(scorecard.bonus.status)}</div>
+              </div>
+              <div>
+                <div class="eyebrow">Why</div>
+                <ul>${scorecard.bonus.reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>
+              </div>
+            </section>
+
+            <section class="section">
+              <h2>Stats</h2>
+              <div class="stats-grid">
+                ${stat('Scheduled days', scorecard.stats.scheduledDays)}
+                ${stat('Days worked', scorecard.stats.daysWorked)}
+                ${stat('PTO used', scorecard.stats.ptoDays)}
+                ${stat('Late minutes', scorecard.stats.totalLateMinutes)}
+                ${stat('Late clock-ins', `${scorecard.stats.lateClockInMinutes} min / ${scorecard.stats.lateClockInOccurrences}x`)}
+                ${stat('Late from lunch', `${scorecard.stats.lateLunchMinutes} min / ${scorecard.stats.lateLunchOccurrences}x`)}
+                ${stat('No lunch log', scorecard.stats.missingLunchDays)}
+                ${stat('Avg start', scorecard.stats.avgStartTime || 'N/A')}
+                ${stat('Avg end', scorecard.stats.avgEndTime || 'N/A')}
+                ${stat('Disqualifying days', scorecard.stats.disqualifyingDays)}
+                ${stat('Incomplete days', scorecard.stats.incompleteDays)}
+                ${stat('Perfect attendance', scorecard.perfectAttendance ? 'Yes' : 'No')}
+              </div>
+            </section>
+
+            <section class="section">
+              <h2>Top Areas To Focus On Next Month</h2>
+              <ul>${scorecard.focusAreas.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+            </section>
+
+            <section class="section">
+              <h2>Exception Days</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Status</th>
+                    <th>Clock In</th>
+                    <th>Clock Out</th>
+                    <th>Late</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody>${exceptionRows}</tbody>
+              </table>
+            </section>
+          </div>
+        `;
+      }
+
+      function stat(label, value) {
+        return `
+          <div class="stat">
+            <div class="stat-label">${escapeHtml(label)}</div>
+            <div class="stat-value">${escapeHtml(value)}</div>
+          </div>
+        `;
+      }
+
+      function updateSheetTab() {
+        if (!latestPayload) return;
+        setBusy(true);
+        setStatus('Updating Scorecard tab.');
+        google.script.run
+          .withSuccessHandler(result => {
+            latestScorecard = result.scorecard;
+            setStatus(result.message || 'Scorecard tab updated.');
+            setBusy(false);
+          })
+          .withFailureHandler(error => {
+            showError(error);
+            setBusy(false);
+          })
+          .saveScorecardToSheet(latestPayload);
+      }
+
+      function exportPng() {
+        if (!latestScorecard) return;
+        const node = document.getElementById('scorecard');
+        const width = 900;
+        const height = Math.max(node.scrollHeight + 48, 640);
+        const styles = document.querySelector('style').textContent;
+        const markup = `
+          <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+            <foreignObject width="100%" height="100%">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px; min-height:${height}px; padding:24px; background:#F7F1EB;">
+                <style>${styles}</style>
+                ${node.outerHTML}
+              </div>
+            </foreignObject>
+          </svg>
+        `;
+        const blob = new Blob([markup], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const image = new Image();
+        image.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const context = canvas.getContext('2d');
+          context.fillStyle = '#F7F1EB';
+          context.fillRect(0, 0, width, height);
+          context.drawImage(image, 0, 0);
+          URL.revokeObjectURL(url);
+          const link = document.createElement('a');
+          link.download = `scorecard-${latestScorecard.employee.employeeCode}-${latestScorecard.month}.png`;
+          link.href = canvas.toDataURL('image/png');
+          link.click();
+        };
+        image.onerror = () => {
+          URL.revokeObjectURL(url);
+          setStatus('PNG export failed in this browser sandbox. Use Print / PDF.', true);
+        };
+        image.src = url;
+      }
+
+      function setBusy(isBusy) {
+        document.getElementById('generateButton').disabled = isBusy;
+        document.getElementById('sheetButton').disabled = isBusy || !latestScorecard;
+        document.getElementById('printButton').disabled = isBusy || !latestScorecard;
+        document.getElementById('pngButton').disabled = isBusy || !latestScorecard;
+      }
+
+      function setStatus(message, isError) {
+        const node = document.getElementById('status');
+        node.textContent = message || '';
+        node.className = isError ? 'status error' : 'status';
+      }
+
+      function showError(error) {
+        setStatus(error && error.message ? error.message : String(error), true);
+      }
+
+      function escapeHtml(value) {
+        return String(value == null ? '' : value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      function escapeAttr(value) {
+        return escapeHtml(value).replace(/`/g, '&#096;');
+      }
+
+      init();
+    </script>
+  </body>
+</html>
