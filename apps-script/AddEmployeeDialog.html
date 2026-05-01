@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      :root {
+        --ink: #172033;
+        --muted: #5f6b7a;
+        --line: #d8dee8;
+        --panel: #f7f9fc;
+        --primary: #1f6feb;
+        --danger: #b42318;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        color: var(--ink);
+        font: 14px/1.4 Arial, sans-serif;
+      }
+      form { padding: 18px; }
+      h2 {
+        margin: 18px 0 10px;
+        font-size: 16px;
+      }
+      h2:first-child { margin-top: 0; }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .field { min-width: 0; }
+      label {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      input, select, textarea {
+        width: 100%;
+        min-height: 36px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 7px 9px;
+        font: inherit;
+      }
+      textarea {
+        min-height: 72px;
+        resize: vertical;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 8px;
+      }
+      th, td {
+        border-bottom: 1px solid var(--line);
+        padding: 7px 6px;
+        text-align: left;
+        vertical-align: middle;
+      }
+      th {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      td:first-child, th:first-child { width: 78px; }
+      td input[type="checkbox"] {
+        width: auto;
+        min-height: auto;
+      }
+      .schedule-time { width: 92px; }
+      .section {
+        margin-top: 14px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+      }
+      .actions {
+        position: sticky;
+        bottom: 0;
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        margin: 18px -18px -18px;
+        padding: 12px 18px;
+        border-top: 1px solid var(--line);
+        background: #fff;
+      }
+      button {
+        min-height: 38px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0 14px;
+        background: #fff;
+        color: var(--ink);
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button.primary {
+        border-color: var(--primary);
+        background: var(--primary);
+        color: #fff;
+      }
+      button:disabled {
+        opacity: 0.65;
+        cursor: not-allowed;
+      }
+      .status {
+        min-height: 22px;
+        margin-top: 10px;
+        color: var(--muted);
+      }
+      .error { color: var(--danger); }
+    </style>
+  </head>
+  <body>
+    <form id="employeeForm" onsubmit="submitForm(event)">
+      <h2>Employee</h2>
+      <div class="grid">
+        <div class="field">
+          <label for="fullName">Full Name</label>
+          <input id="fullName" required oninput="suggestCode()">
+        </div>
+        <div class="field">
+          <label for="displayName">Display Name</label>
+          <input id="displayName">
+        </div>
+        <div class="field">
+          <label for="employeeCode">Employee Code</label>
+          <input id="employeeCode" required>
+        </div>
+        <div class="field">
+          <label for="email">Email</label>
+          <input id="email" type="email">
+        </div>
+        <div class="field">
+          <label for="position">Position</label>
+          <input id="position">
+        </div>
+        <div class="field">
+          <label for="manager">Manager</label>
+          <input id="manager">
+        </div>
+        <div class="field">
+          <label for="startDate">Start Date</label>
+          <input id="startDate" type="date">
+        </div>
+        <div class="field">
+          <label for="pin">Web App PIN</label>
+          <input id="pin" autocomplete="new-password">
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Work Schedule</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Day</th>
+              <th>Works</th>
+              <th>Start</th>
+              <th>End</th>
+            </tr>
+          </thead>
+          <tbody id="scheduleRows"></tbody>
+        </table>
+        <div class="grid" style="margin-top:12px;">
+          <div class="field">
+            <label for="lunchStart">Scheduled Lunch Start</label>
+            <input id="lunchStart" class="schedule-time" type="number" min="0" max="24" step="0.25" value="13">
+          </div>
+          <div class="field">
+            <label for="lunchEnd">Scheduled Lunch End</label>
+            <input id="lunchEnd" class="schedule-time" type="number" min="0" max="24" step="0.25" value="14">
+          </div>
+        </div>
+      </div>
+
+      <div id="compSection" class="section">
+        <h2>Compensation</h2>
+        <div class="grid">
+          <div class="field">
+            <label for="rampTier">Ramp Tier</label>
+            <input id="rampTier">
+          </div>
+          <div class="field">
+            <label for="monthlyBaseSalary">Monthly Base Salary</label>
+            <input id="monthlyBaseSalary" type="number" min="0" step="0.01">
+          </div>
+          <div class="field">
+            <label for="monthlyBenefits">Monthly Benefits</label>
+            <input id="monthlyBenefits" type="number" min="0" step="0.01">
+          </div>
+          <div class="field">
+            <label for="monthlyAttendanceBonus">Monthly Attendance Bonus</label>
+            <input id="monthlyAttendanceBonus" type="number" min="0" step="0.01">
+          </div>
+          <div class="field">
+            <label for="monthlyKpiBonusMax">Monthly KPI Bonus Max</label>
+            <input id="monthlyKpiBonusMax" type="number" min="0" step="0.01">
+          </div>
+          <div class="field">
+            <label for="quarterlyPaBonus">Quarterly PA Bonus</label>
+            <input id="quarterlyPaBonus" type="number" min="0" step="0.01">
+          </div>
+          <div class="field">
+            <label for="annualPtoDays">Annual PTO Days</label>
+            <input id="annualPtoDays" type="number" min="0" step="0.25">
+          </div>
+          <div class="field">
+            <label for="annualNonPtoDays">Annual Non-PTO Days</label>
+            <input id="annualNonPtoDays" type="number" min="0" step="0.25">
+          </div>
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:14px;">
+        <label for="notes">Notes</label>
+        <textarea id="notes"></textarea>
+      </div>
+      <p id="status" class="status"></p>
+
+      <div class="actions">
+        <button type="button" onclick="google.script.host.close()">Cancel</button>
+        <button id="saveButton" class="primary" type="submit">Save Employee</button>
+      </div>
+    </form>
+
+    <script>
+      const INCLUDE_COMP = <?!= JSON.stringify(includeComp) ?>;
+      const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+      function init() {
+        document.getElementById('compSection').style.display = INCLUDE_COMP ? '' : 'none';
+        document.getElementById('scheduleRows').innerHTML = DAYS.map(day => `
+          <tr>
+            <td>${day}</td>
+            <td><input id="${day}Enabled" type="checkbox" ${['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].includes(day) ? 'checked' : ''}></td>
+            <td><input id="${day}Start" class="schedule-time" type="number" min="0" max="24" step="0.25" value="10"></td>
+            <td><input id="${day}End" class="schedule-time" type="number" min="0" max="24" step="0.25" value="19"></td>
+          </tr>
+        `).join('');
+        google.script.run
+          .withSuccessHandler(defaults => {
+            document.getElementById('startDate').value = defaults.today || '';
+          })
+          .getAddEmployeeDefaults();
+      }
+
+      function suggestCode() {
+        const code = document.getElementById('employeeCode');
+        if (code.value.trim()) return;
+        const fullName = document.getElementById('fullName').value.trim();
+        code.value = fullName.split(/\s+/)[0].toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+        const display = document.getElementById('displayName');
+        if (!display.value.trim()) display.value = fullName.split(/\s+/)[0] || '';
+      }
+
+      function submitForm(event) {
+        event.preventDefault();
+        const payload = collectPayload();
+        if (!payload.fullName || !payload.employeeCode) {
+          setStatus('Full Name and Employee Code are required.', true);
+          return;
+        }
+        setBusy(true);
+        setStatus('Saving employee...');
+        google.script.run
+          .withSuccessHandler(result => {
+            setStatus(result.message || 'Employee saved.');
+            google.script.host.close();
+          })
+          .withFailureHandler(error => {
+            setStatus(error && error.message ? error.message : String(error), true);
+            setBusy(false);
+          })
+          .addEmployee(payload);
+      }
+
+      function collectPayload() {
+        const schedule = {
+          lunchStart: value('lunchStart'),
+          lunchEnd: value('lunchEnd')
+        };
+        DAYS.forEach(day => {
+          schedule[day] = {
+            enabled: document.getElementById(`${day}Enabled`).checked,
+            start: value(`${day}Start`),
+            end: value(`${day}End`)
+          };
+        });
+
+        return {
+          includeComp: INCLUDE_COMP,
+          fullName: value('fullName'),
+          displayName: value('displayName'),
+          employeeCode: value('employeeCode'),
+          email: value('email'),
+          position: value('position'),
+          manager: value('manager'),
+          startDate: value('startDate'),
+          pin: value('pin'),
+          schedule,
+          comp: INCLUDE_COMP ? {
+            rampTier: value('rampTier'),
+            monthlyBaseSalary: value('monthlyBaseSalary'),
+            monthlyBenefits: value('monthlyBenefits'),
+            monthlyAttendanceBonus: value('monthlyAttendanceBonus'),
+            monthlyKpiBonusMax: value('monthlyKpiBonusMax'),
+            quarterlyPaBonus: value('quarterlyPaBonus'),
+            annualPtoDays: value('annualPtoDays'),
+            annualNonPtoDays: value('annualNonPtoDays')
+          } : {},
+          notes: value('notes')
+        };
+      }
+
+      function value(id) {
+        return document.getElementById(id).value.trim();
+      }
+
+      function setBusy(isBusy) {
+        document.getElementById('saveButton').disabled = isBusy;
+      }
+
+      function setStatus(message, isError) {
+        const node = document.getElementById('status');
+        node.textContent = message || '';
+        node.className = isError ? 'status error' : 'status';
+      }
+
+      init();
+    </script>
+  </body>
+</html>

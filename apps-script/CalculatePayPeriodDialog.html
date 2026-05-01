@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      :root {
+        --ink: #172033;
+        --muted: #5f6b7a;
+        --line: #d8dee8;
+        --primary: #1f6feb;
+        --danger: #b42318;
+        --panel: #f7f9fc;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 18px;
+        color: var(--ink);
+        font: 14px/1.4 Arial, sans-serif;
+      }
+      label {
+        display: block;
+        margin: 14px 0 6px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      select {
+        width: 100%;
+        min-height: 38px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 8px 10px;
+        font: inherit;
+      }
+      .employee-list {
+        max-height: 280px;
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+      }
+      .employee {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 38px;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+      .employee:last-child { border-bottom: 0; }
+      .employee input { margin: 0; }
+      .tools {
+        display: flex;
+        gap: 8px;
+        margin: 8px 0;
+      }
+      .actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 18px;
+      }
+      button {
+        min-height: 38px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0 14px;
+        background: #fff;
+        color: var(--ink);
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .primary {
+        border-color: var(--primary);
+        background: var(--primary);
+        color: #fff;
+      }
+      button:disabled {
+        opacity: 0.65;
+        cursor: not-allowed;
+      }
+      .status {
+        min-height: 22px;
+        margin-top: 12px;
+        color: var(--muted);
+        white-space: pre-wrap;
+      }
+      .error { color: var(--danger); }
+    </style>
+  </head>
+  <body>
+    <form onsubmit="submitForm(event)">
+      <label for="periodId">Pay Period</label>
+      <select id="periodId" required></select>
+
+      <label>Employees</label>
+      <div class="tools">
+        <button type="button" onclick="setAll(true)">Select All</button>
+        <button type="button" onclick="setAll(false)">Clear</button>
+      </div>
+      <div id="employeeList" class="employee-list">Loading...</div>
+
+      <p id="status" class="status"></p>
+
+      <div class="actions">
+        <button type="button" onclick="google.script.host.close()">Cancel</button>
+        <button id="calculateButton" class="primary" type="submit">Calculate</button>
+      </div>
+    </form>
+
+    <script>
+      function init() {
+        google.script.run
+          .withSuccessHandler(render)
+          .withFailureHandler(showError)
+          .getCalculatePayPeriodDialogData();
+      }
+
+      function render(data) {
+        const periodSelect = document.getElementById('periodId');
+        periodSelect.innerHTML = data.periods.map(period => {
+          const label = `${period.periodId} | ${period.periodStart} to ${period.periodEnd} | ${period.status}`;
+          const selected = period.periodId === data.defaultPeriodId ? 'selected' : '';
+          return `<option value="${escapeAttr(period.periodId)}" ${selected}>${escapeHtml(label)}</option>`;
+        }).join('');
+
+        document.getElementById('employeeList').innerHTML = data.employees.map(employee => `
+          <label class="employee">
+            <input type="checkbox" name="employeeCode" value="${escapeAttr(employee.employeeCode)}" checked>
+            <span>${escapeHtml(employee.displayName)} (${escapeHtml(employee.employeeCode)})</span>
+          </label>
+        `).join('');
+        setStatus('');
+      }
+
+      function setAll(checked) {
+        document.querySelectorAll('input[name="employeeCode"]').forEach(input => {
+          input.checked = checked;
+        });
+      }
+
+      function submitForm(event) {
+        event.preventDefault();
+        const employeeCodes = Array.from(document.querySelectorAll('input[name="employeeCode"]:checked')).map(input => input.value);
+        if (!employeeCodes.length) {
+          setStatus('Select at least one employee.', true);
+          return;
+        }
+        setBusy(true);
+        setStatus('Rebuilding attendance and calculating payroll...');
+        google.script.run
+          .withSuccessHandler(result => {
+            const warnings = (result.warnings || []).filter(Boolean);
+            const message = [result.message || 'Calculation complete.']
+              .concat(warnings.length ? ['Warnings:', warnings.join('\n')] : [])
+              .join('\n');
+            setStatus(message, false);
+          })
+          .withFailureHandler(error => {
+            showError(error);
+            setBusy(false);
+          })
+          .calculatePayPeriod({
+            periodId: document.getElementById('periodId').value,
+            employeeCodes
+          });
+      }
+
+      function setBusy(isBusy) {
+        document.getElementById('calculateButton').disabled = isBusy;
+      }
+
+      function setStatus(message, isError) {
+        const node = document.getElementById('status');
+        node.textContent = message || '';
+        node.className = isError ? 'status error' : 'status';
+      }
+
+      function showError(error) {
+        setStatus(error && error.message ? error.message : String(error), true);
+      }
+
+      function escapeHtml(value) {
+        return String(value == null ? '' : value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      function escapeAttr(value) {
+        return escapeHtml(value).replace(/`/g, '&#096;');
+      }
+
+      init();
+    </script>
+  </body>
+</html>

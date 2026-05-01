@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      :root {
+        --ink: #172033;
+        --muted: #5f6b7a;
+        --line: #d8dee8;
+        --primary: #1f6feb;
+        --danger: #b42318;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 18px;
+        color: var(--ink);
+        font: 14px/1.4 Arial, sans-serif;
+      }
+      label {
+        display: block;
+        margin: 14px 0 6px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      select, input, textarea {
+        width: 100%;
+        min-height: 38px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 8px 10px;
+        font: inherit;
+      }
+      textarea {
+        min-height: 82px;
+        resize: vertical;
+      }
+      .actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 18px;
+      }
+      button {
+        min-height: 38px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0 14px;
+        background: #fff;
+        color: var(--ink);
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .primary {
+        border-color: var(--primary);
+        background: var(--primary);
+        color: #fff;
+      }
+      button:disabled {
+        opacity: 0.65;
+        cursor: not-allowed;
+      }
+      .status {
+        min-height: 22px;
+        margin-top: 12px;
+        color: var(--muted);
+      }
+      .error { color: var(--danger); }
+    </style>
+  </head>
+  <body>
+    <form onsubmit="submitForm(event)">
+      <label for="employeeCode">Employee</label>
+      <select id="employeeCode" required></select>
+
+      <label for="eventType">Event Type</label>
+      <select id="eventType" required></select>
+
+      <label for="timestamp">Timestamp</label>
+      <input id="timestamp" type="datetime-local" required>
+
+      <label for="notes">Notes</label>
+      <textarea id="notes" placeholder="Reason for manual entry or correction"></textarea>
+
+      <p id="status" class="status">Loading...</p>
+
+      <div class="actions">
+        <button type="button" onclick="google.script.host.close()">Cancel</button>
+        <button id="saveButton" class="primary" type="submit">Save Event</button>
+      </div>
+    </form>
+
+    <script>
+      function init() {
+        google.script.run
+          .withSuccessHandler(data => {
+            document.getElementById('employeeCode').innerHTML = data.employees
+              .map(employee => `<option value="${escapeAttr(employee.employeeCode)}">${escapeHtml(employee.displayName)} (${escapeHtml(employee.employeeCode)})</option>`)
+              .join('');
+            document.getElementById('eventType').innerHTML = data.eventTypes
+              .map(event => `<option value="${escapeAttr(event.type)}">${escapeHtml(event.label)}</option>`)
+              .join('');
+            document.getElementById('timestamp').value = data.nowLocal || '';
+            setStatus('');
+          })
+          .withFailureHandler(showError)
+          .getManualClockEventDialogData();
+      }
+
+      function submitForm(event) {
+        event.preventDefault();
+        setBusy(true);
+        setStatus('Saving manual event...');
+        google.script.run
+          .withSuccessHandler(result => {
+            setStatus(result.message || 'Saved.');
+            google.script.host.close();
+          })
+          .withFailureHandler(error => {
+            showError(error);
+            setBusy(false);
+          })
+          .addManualClockEvent({
+            employeeCode: value('employeeCode'),
+            eventType: value('eventType'),
+            timestamp: value('timestamp'),
+            notes: value('notes')
+          });
+      }
+
+      function value(id) {
+        return document.getElementById(id).value.trim();
+      }
+
+      function setBusy(isBusy) {
+        document.getElementById('saveButton').disabled = isBusy;
+      }
+
+      function setStatus(message, isError) {
+        const node = document.getElementById('status');
+        node.textContent = message || '';
+        node.className = isError ? 'status error' : 'status';
+      }
+
+      function showError(error) {
+        setStatus(error && error.message ? error.message : String(error), true);
+      }
+
+      function escapeHtml(value) {
+        return String(value == null ? '' : value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      function escapeAttr(value) {
+        return escapeHtml(value).replace(/`/g, '&#096;');
+      }
+
+      init();
+    </script>
+  </body>
+</html>
