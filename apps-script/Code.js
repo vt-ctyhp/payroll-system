@@ -787,8 +787,9 @@ function editAttendanceLogEntry(payload) {
 
 function getCalculatePayPeriodDialogData() {
   const payroll = requirePayrollSpreadsheet_();
+  repairPayPeriodIds_(payroll);
   const periods = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.periods)).map(row => ({
-    periodId: row['Period ID'],
+    periodId: normalizePeriodId_(row['Period ID']),
     payDate: displayDate_(row['Pay Date']),
     periodStart: displayDate_(row['Period Start']),
     periodEnd: displayDate_(row['Period End']),
@@ -1011,14 +1012,15 @@ function refreshQuarterlyPaTracker() {
 
 function calculatePayPeriod(payload) {
   payload = payload || {};
-  const periodId = payload.periodId;
+  const periodId = normalizePeriodId_(payload.periodId);
   if (!periodId) throw new Error('Select a pay period.');
 
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
+  repairPayPeriodIds_(payroll);
   const periodSheet = getSheet_(payroll, CONFIG.payrollTabs.periods);
   const periodRows = readObjects_(periodSheet);
-  const period = periodRows.filter(row => row['Period ID'] === periodId)[0];
+  const period = periodRows.filter(row => normalizePeriodId_(row['Period ID']) === periodId)[0];
   if (!period) throw new Error(`Pay period ${periodId} was not found.`);
 
   const periodStart = parseDateOrBlank_(period['Period Start']);
@@ -1064,6 +1066,8 @@ function calculatePayPeriod(payload) {
 
 function markPayPeriodPaid(periodId) {
   const payroll = requirePayrollSpreadsheet_();
+  periodId = normalizePeriodId_(periodId);
+  repairPayPeriodIds_(payroll);
   const sheet = getSheet_(payroll, CONFIG.payrollTabs.periods);
   setPayPeriodStatus_(sheet, periodId, 'Paid');
   return { message: `${periodId} marked as Paid.` };
@@ -1688,8 +1692,9 @@ function upsertQuarterlyPaTrackerRows_(sheet, rows) {
 
 function listPayPeriodsForUi_() {
   const payroll = requirePayrollSpreadsheet_();
+  repairPayPeriodIds_(payroll);
   return readObjects_(getSheet_(payroll, CONFIG.payrollTabs.periods)).map(row => ({
-    periodId: row['Period ID'],
+    periodId: normalizePeriodId_(row['Period ID']),
     payDate: displayDate_(row['Pay Date']),
     periodStart: displayDate_(row['Period Start']),
     periodEnd: displayDate_(row['Period End']),
@@ -1699,8 +1704,10 @@ function listPayPeriodsForUi_() {
 }
 
 function getPayPeriodById_(payroll, periodId) {
+  periodId = normalizePeriodId_(periodId);
+  repairPayPeriodIds_(payroll);
   const period = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.periods))
-    .filter(row => row['Period ID'] === periodId)[0];
+    .filter(row => normalizePeriodId_(row['Period ID']) === periodId)[0];
   if (!period) throw new Error(`Pay period ${periodId} was not found.`);
   return period;
 }
@@ -1730,12 +1737,14 @@ function ensurePayPeriodsForDialog_(payroll) {
   if (!readObjects_(sheet).length) {
     seedPayPeriods_(payroll, new Date().getFullYear());
   }
+  repairPayPeriodIds_(payroll);
 }
 
 function groupBonusRowsByEmployee_(bonusRows, periodId, type) {
+  periodId = normalizePeriodId_(periodId);
   const grouped = {};
   bonusRows.forEach(row => {
-    if (row['Pay Period ID'] !== periodId) return;
+    if (normalizePeriodId_(row['Pay Period ID']) !== periodId) return;
     if (row['Type (KPI / Additional / Positive Adj / Negative Adj)'] !== type) return;
     const code = normalizeCode_(row['Employee Code']);
     if (!grouped[code]) grouped[code] = { amount: 0, descriptions: [] };
@@ -1746,6 +1755,7 @@ function groupBonusRowsByEmployee_(bonusRows, periodId, type) {
 }
 
 function replaceBonusAdjustmentRows_(sheet, periodId, types, employeeCodes, replacements) {
+  periodId = normalizePeriodId_(periodId);
   const typeSet = new Set(types);
   const codeSet = new Set(employeeCodes.map(normalizeCode_).filter(Boolean));
   const values = sheet.getDataRange().getValues();
@@ -1755,7 +1765,7 @@ function replaceBonusAdjustmentRows_(sheet, periodId, types, employeeCodes, repl
     const codeIdx = headers.indexOf('Employee Code');
     const typeIdx = headers.indexOf('Type (KPI / Additional / Positive Adj / Negative Adj)');
     for (let row = values.length - 1; row >= 1; row -= 1) {
-      const matchesPeriod = values[row][periodIdx] === periodId;
+      const matchesPeriod = normalizePeriodId_(values[row][periodIdx]) === periodId;
       const matchesType = typeSet.has(values[row][typeIdx]);
       const matchesCode = codeSet.has(normalizeCode_(values[row][codeIdx]));
       if (matchesPeriod && matchesType && matchesCode) {
@@ -1767,6 +1777,7 @@ function replaceBonusAdjustmentRows_(sheet, periodId, types, employeeCodes, repl
 }
 
 function summarizeBonusAdjustments_(bonusRows, periodId, employeeCode) {
+  periodId = normalizePeriodId_(periodId);
   const summary = {
     kpi: 0,
     additional: 0,
@@ -1776,7 +1787,7 @@ function summarizeBonusAdjustments_(bonusRows, periodId, employeeCode) {
   };
   const code = normalizeCode_(employeeCode);
   bonusRows.forEach(row => {
-    if (row['Pay Period ID'] !== periodId || normalizeCode_(row['Employee Code']) !== code) return;
+    if (normalizePeriodId_(row['Pay Period ID']) !== periodId || normalizeCode_(row['Employee Code']) !== code) return;
     const type = row['Type (KPI / Additional / Positive Adj / Negative Adj)'];
     const amount = toNumberOrZero_(row.Amount);
     if (type === 'KPI') summary.kpi += amount;
@@ -1897,7 +1908,7 @@ function ensurePhase1TestPayPeriod_(payroll) {
     'EOM',
     'Open'
   ];
-  const existing = readObjects_(sheet).filter(period => period['Period ID'] === PHASE1_TEST.periodId)[0];
+  const existing = readObjects_(sheet).filter(period => normalizePeriodId_(period['Period ID']) === PHASE1_TEST.periodId)[0];
   if (existing) {
     sheet.getRange(existing._rowNumber, 1, 1, row.length).setValues([row]);
   } else {
@@ -2366,7 +2377,7 @@ function calculateEmployeePay_(employeeCode, period, context) {
   const employee = context.employees[code];
   const periodStart = parseDateOrBlank_(period['Period Start']);
   const periodEnd = parseDateOrBlank_(period['Period End']);
-  const periodLabel = `${period['Period ID']} (${displayDate_(periodStart)} - ${displayDate_(periodEnd)})`;
+  const periodLabel = `${normalizePeriodId_(period['Period ID'])} (${displayDate_(periodStart)} - ${displayDate_(periodEnd)})`;
   const employeeName = employee ? (employee['Display Name'] || employee['Full Name'] || code) : code;
 
   if (!employee) {
@@ -2434,7 +2445,7 @@ function calculateEmployeePay_(employeeCode, period, context) {
   const benefits = calculateBenefitsForPeriod_(code, employee, period, context, comp);
   const attendanceBonus = calculateMonthlyAttendanceBonus_(code, period, context, comp);
   const quarterlyPaBonus = calculateQuarterlyPaBonus_(code, period, context, comp);
-  const bonusAdjustments = summarizeBonusAdjustments_(context.bonusRows, period['Period ID'], code);
+  const bonusAdjustments = summarizeBonusAdjustments_(context.bonusRows, normalizePeriodId_(period['Period ID']), code);
   const isMidPayroll = isMidPayroll_(period);
   const attendanceBonusAmount = toNumberOrZero_(attendanceBonus.amount);
   const quarterlyPaAmount = toNumberOrZero_(quarterlyPaBonus.amount);
@@ -2459,7 +2470,7 @@ function calculateEmployeePay_(employeeCode, period, context) {
   if (bonusAdjustments.notes.length) notes.push(`Bonuses/adjustments: ${bonusAdjustments.notes.join(' | ')}`);
 
   const calculationRow = [
-    period['Period ID'],
+    normalizePeriodId_(period['Period ID']),
     code,
     employeeName,
     periodStart,
@@ -2523,9 +2534,9 @@ function calculateEmployeePay_(employeeCode, period, context) {
 function blankPayrollResult_(period, employeeCode, employeeName, status, note) {
   const periodStart = parseDateOrBlank_(period['Period Start']);
   const periodEnd = parseDateOrBlank_(period['Period End']);
-  const periodLabel = `${period['Period ID']} (${displayDate_(periodStart)} - ${displayDate_(periodEnd)})`;
+  const periodLabel = `${normalizePeriodId_(period['Period ID'])} (${displayDate_(periodStart)} - ${displayDate_(periodEnd)})`;
   const calculationRow = [
-    period['Period ID'],
+    normalizePeriodId_(period['Period ID']),
     employeeCode,
     employeeName,
     periodStart || '',
@@ -2700,8 +2711,12 @@ function removeDefaultBlankSheet_(ss) {
 
 function seedPayPeriods_(ss, year) {
   const sheet = getSheet_(ss, CONFIG.payrollTabs.periods);
+  sheet.getRange('A:A').setNumberFormat('@');
   const existing = readObjects_(sheet);
-  if (existing.length) return;
+  if (existing.length) {
+    repairPayPeriodIds_(ss);
+    return;
+  }
   const rows = [];
   for (let month = 0; month < 12; month += 1) {
     const payDateMid = new Date(year, month, 15);
@@ -2728,6 +2743,7 @@ function seedPayPeriods_(ss, year) {
     ]);
   }
   appendRows_(sheet, rows);
+  repairPayPeriodIds_(ss);
 }
 
 function buildAttendanceLogRow_(date, employee, schedule, events, holidays, overrideStatus) {
@@ -3128,12 +3144,16 @@ function getDefaultOpenPeriodId_(periods) {
 }
 
 function setPayPeriodStatus_(sheet, periodId, status) {
+  periodId = normalizePeriodId_(periodId);
   const values = sheet.getDataRange().getValues();
   const headers = values[0];
   const idIdx = headers.indexOf('Period ID');
   const statusIdx = headers.indexOf('Status (Open / Calculated / Paid)');
   for (let i = 1; i < values.length; i += 1) {
-    if (values[i][idIdx] === periodId) {
+    if (normalizePeriodId_(values[i][idIdx]) === periodId) {
+      if (values[i][idIdx] !== periodId) {
+        sheet.getRange(i + 1, idIdx + 1).setNumberFormat('@').setValue(periodId);
+      }
       sheet.getRange(i + 1, statusIdx + 1).setValue(status);
       return;
     }
@@ -3249,6 +3269,36 @@ function formatDateKey_(value) {
   const date = parseDateOrBlank_(value);
   if (!date) return '';
   return Utilities.formatDate(date, CONFIG.timezone, 'yyyy-MM-dd');
+}
+
+function normalizePeriodId_(value) {
+  if (value === null || value === undefined || value === '') return '';
+  if (Object.prototype.toString.call(value) === '[object Date]' && !Number.isNaN(value.getTime())) {
+    return formatDateKey_(value);
+  }
+  const text = String(value).trim();
+  const parsed = text.match(/^(\d{4}-\d{2}-\d{2})T/);
+  if (parsed) return parsed[1];
+  return text;
+}
+
+function repairPayPeriodIds_(payroll) {
+  const sheet = getSheet_(payroll, CONFIG.payrollTabs.periods);
+  sheet.getRange('A:A').setNumberFormat('@');
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return 0;
+  const headers = values[0];
+  const idIdx = headers.indexOf('Period ID');
+  if (idIdx === -1) return 0;
+  let repaired = 0;
+  for (let row = 1; row < values.length; row += 1) {
+    const normalized = normalizePeriodId_(values[row][idIdx]);
+    if (normalized && values[row][idIdx] !== normalized) {
+      sheet.getRange(row + 1, idIdx + 1).setValue(normalized);
+      repaired += 1;
+    }
+  }
+  return repaired;
 }
 
 function formatDateTimeLocal_(value) {
