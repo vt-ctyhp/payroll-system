@@ -3734,6 +3734,7 @@ function appendClockEvent_(entry) {
     entry.device || '',
     entry.notes || ''
   ]);
+  SpreadsheetApp.flush();
 }
 
 function getClockEvents_(ss, startDate, endDate, employeeCode) {
