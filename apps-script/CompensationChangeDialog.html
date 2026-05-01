@@ -249,7 +249,7 @@
               <tr>
                 <td>${escapeHtml(field.label)}</td>
                 <td>${escapeHtml(field.value)}</td>
-                <td><input id="${escapeAttr(field.key)}" type="${field.type === 'number' ? 'number' : 'text'}" step="0.01" placeholder="Leave blank to keep current"></td>
+                <td>${renderFieldInput(field)}</td>
               </tr>
             `).join('');
             setStatus('Ready.');
@@ -258,11 +258,21 @@
           .getCompensationChangeEmployeeData(employeeCode);
       }
 
-      function toggleRetro() {
-        document.getElementById('retroGrid').style.display = document.getElementById('retroactive').checked ? 'grid' : 'none';
-      }
+	      function toggleRetro() {
+	        document.getElementById('retroGrid').style.display = document.getElementById('retroactive').checked ? 'grid' : 'none';
+	      }
 
-      function submitForm(event) {
+	      function renderFieldInput(field) {
+	        if (field.type === 'select') {
+	          const options = [''].concat(field.options || []);
+	          return `<select id="${escapeAttr(field.key)}">${options.map(option => (
+	            `<option value="${escapeAttr(option)}">${escapeHtml(option || 'Leave blank to keep current')}</option>`
+	          )).join('')}</select>`;
+	        }
+	        return `<input id="${escapeAttr(field.key)}" type="${field.type === 'number' ? 'number' : 'text'}" step="0.01" placeholder="Leave blank to keep current">`;
+	      }
+
+	      function submitForm(event) {
         event.preventDefault();
         const newComp = {};
         currentFields.forEach(field => {

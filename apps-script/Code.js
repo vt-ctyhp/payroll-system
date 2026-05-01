@@ -24,6 +24,8 @@ const CONFIG = {
     'Incomplete (no clock-out)'
   ],
   timeOffTypes: ['PTO', 'UTO', 'Non-PTO'],
+  ptoPlanTypes: ['Fixed Annual', 'Accrued Monthly'],
+  defaultPtoPlanType: 'Fixed Annual',
   requestStatuses: ['Pending', 'Approved', 'Denied'],
   attendanceTabs: {
     employees: 'Employees',
@@ -149,9 +151,13 @@ const HEADERS = {
   ptoBalances: [
     'Employee Code',
     'Year',
+    'PTO Plan Type',
     'Annual PTO Allowance',
+    'Monthly PTO Accrual Days',
+    'Earned PTO',
     'Used PTO',
     'Remaining PTO',
+    'Payout Eligible PTO',
     'Annual Non-PTO Allowance',
     'Used Non-PTO',
     'Remaining Non-PTO'
@@ -178,7 +184,9 @@ const HEADERS = {
     'Quarterly PA Bonus',
     'Annual PTO Days',
     'Annual Non-PTO Days',
-    'Notes'
+    'Notes',
+    'PTO Plan Type',
+    'Monthly PTO Accrual Days'
   ],
   periods: ['Period ID', 'Pay Date', 'Period Start', 'Period End', 'Period Type (Mid / EOM)', 'Status (Open / Calculated / Paid)'],
   calculations: [
@@ -759,7 +767,9 @@ function recordClockEvent(payload) {
 function getAddEmployeeDefaults() {
   return {
     today: formatDateKey_(new Date()),
-    statuses: ['Active', 'Inactive', 'Resigned', 'Terminated']
+    statuses: ['Active', 'Inactive', 'Resigned', 'Terminated'],
+    ptoPlanTypes: CONFIG.ptoPlanTypes,
+    defaultPtoPlanType: CONFIG.defaultPtoPlanType
   };
 }
 
@@ -813,7 +823,9 @@ function addEmployee(payload) {
     toNumberOrBlank_(comp.quarterlyPaBonus),
     toNumberOrBlank_(comp.annualPtoDays),
     toNumberOrBlank_(comp.annualNonPtoDays),
-    comp.notes || (payload.includeComp ? '' : 'Compensation pending payroll processor setup.')
+    comp.notes || (payload.includeComp ? '' : 'Compensation pending payroll processor setup.'),
+    normalizePtoPlanType_(comp.ptoPlanType),
+    toNumberOrBlank_(comp.monthlyPtoAccrualDays)
   ]);
 
   const lifecycleSheet = getSheet_(payroll, CONFIG.payrollTabs.lifecycle);
@@ -829,6 +841,7 @@ function addEmployee(payload) {
     payload.notes || ''
   ]);
 
+  refreshPtoBalances_(attendance);
   applyAttendanceFormatting_(attendance);
   applyPayrollFormatting_(payroll);
   return { message: `${payload.fullName} (${code}) added.` };
@@ -1286,6 +1299,7 @@ function getCompensationChangeEmployeeData(employeeCode) {
       header: field.header,
       label: field.label,
       type: field.type,
+      options: field.options || [],
       value: blankable_(current[field.header])
     }))
   };
@@ -1323,7 +1337,13 @@ function saveCompensationChange(payload) {
     const hasNewValue = rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== '';
     let newValue = oldValue;
     if (hasNewValue) {
-      newValue = field.type === 'number' ? toNumberOrBlank_(rawValue) : String(rawValue).trim();
+      if (field.type === 'number') {
+        newValue = toNumberOrBlank_(rawValue);
+      } else if (field.type === 'select' && field.header === 'PTO Plan Type') {
+        newValue = normalizePtoPlanType_(rawValue);
+      } else {
+        newValue = String(rawValue).trim();
+      }
       if (field.type === 'number' && newValue === '') throw new Error(`${field.label} must be numeric.`);
       if (normalizeCompComparable_(oldValue) !== normalizeCompComparable_(newValue)) {
         changes.push({ field, oldValue, newValue });
@@ -1346,7 +1366,9 @@ function saveCompensationChange(payload) {
     toNumberOrBlank_(nextValues['Quarterly PA Bonus']),
     toNumberOrBlank_(nextValues['Annual PTO Days']),
     toNumberOrBlank_(nextValues['Annual Non-PTO Days']),
-    String(payload.notes || '').trim() || reason
+    String(payload.notes || '').trim() || reason,
+    normalizePtoPlanType_(nextValues['PTO Plan Type']),
+    toNumberOrBlank_(nextValues['Monthly PTO Accrual Days'])
   ]]);
 
   const retroactive = Boolean(payload.retroactive);
@@ -1370,7 +1392,7 @@ function saveCompensationChange(payload) {
   ]);
   appendRows_(getSheet_(payroll, CONFIG.payrollTabs.compChanges), logRows);
 
-  if (changes.some(change => ['Annual PTO Days', 'Annual Non-PTO Days'].indexOf(change.field.header) !== -1)) {
+  if (changes.some(change => ['Annual PTO Days', 'Annual Non-PTO Days', 'PTO Plan Type', 'Monthly PTO Accrual Days'].indexOf(change.field.header) !== -1)) {
     refreshPtoBalances_(attendance);
   }
   applyPayrollFormatting_(payroll);
@@ -1429,6 +1451,7 @@ function offboardEmployee(payload) {
   closeEffectiveRowsThroughDate_(getSheet_(attendance, CONFIG.attendanceTabs.schedules), code, lastWorkingDay);
   closeEffectiveRowsThroughDate_(getSheet_(payroll, CONFIG.payrollTabs.comp), code, lastWorkingDay);
   upsertFinalKpiBonus_(attendance, payroll, code, finalPeriod, lastWorkingDay);
+  const ptoPayout = upsertFinalPtoPayoutAdjustment_(attendance, payroll, code, finalPeriod, lastWorkingDay);
 
   const payrollResult = calculatePayPeriod({
     periodId: finalPeriod.periodId,
@@ -1445,7 +1468,7 @@ function offboardEmployee(payload) {
     reason,
     getActiveUserEmail_(),
     finalPeriod.periodId,
-    [String(payload.notes || '').trim(), payrollResult.warnings.join(' ')].filter(Boolean).join(' | ')
+    [String(payload.notes || '').trim(), ptoPayout.note, payrollResult.warnings.join(' ')].filter(Boolean).join(' | ')
   ]]);
   refreshPtoBalances_(attendance);
   applyAttendanceFormatting_(attendance);
@@ -1462,7 +1485,9 @@ function getReactivateDialogData() {
   setupAttendanceSpreadsheet_(attendance);
   return {
     employees: listEmployeesForLifecycleUi_(['Inactive', 'Resigned', 'Terminated']),
-    today: formatDateKey_(new Date())
+    today: formatDateKey_(new Date()),
+    ptoPlanTypes: CONFIG.ptoPlanTypes,
+    defaultPtoPlanType: CONFIG.defaultPtoPlanType
   };
 }
 
@@ -1514,7 +1539,9 @@ function reactivateEmployee(payload) {
     toNumberOrBlank_(comp.quarterlyPaBonus),
     toNumberOrBlank_(comp.annualPtoDays),
     toNumberOrBlank_(comp.annualNonPtoDays),
-    comp.notes || 'Reactivation compensation terms.'
+    comp.notes || 'Reactivation compensation terms.',
+    normalizePtoPlanType_(comp.ptoPlanType),
+    toNumberOrBlank_(comp.monthlyPtoAccrualDays)
   ]]);
   appendRows_(getSheet_(payroll, CONFIG.payrollTabs.lifecycle), [[
     makeId_('LIFE'),
@@ -1723,8 +1750,31 @@ function setupPayrollSpreadsheet_(ss) {
   ensureSheet_(ss, CONFIG.payrollTabs.paTracker, HEADERS.paTracker);
   ensureSheet_(ss, CONFIG.payrollTabs.bonuses, HEADERS.bonuses);
   seedPayPeriods_(ss, new Date().getFullYear());
+  migratePtoPlanDefaults_(ss);
   removeDefaultBlankSheet_(ss);
   applyPayrollFormatting_(ss);
+}
+
+function migratePtoPlanDefaults_(payroll) {
+  const sheet = getSheet_(payroll, CONFIG.payrollTabs.comp);
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return 0;
+  const headers = values[0];
+  const planIdx = headers.indexOf('PTO Plan Type');
+  const accrualIdx = headers.indexOf('Monthly PTO Accrual Days');
+  if (planIdx === -1 || accrualIdx === -1) return 0;
+
+  let updated = 0;
+  for (let row = 1; row < values.length; row += 1) {
+    const hasData = values[row].some(cell => cell !== '' && cell !== null);
+    if (!hasData) continue;
+    const normalized = normalizePtoPlanType_(values[row][planIdx]);
+    if (values[row][planIdx] !== normalized) {
+      sheet.getRange(row + 1, planIdx + 1).setValue(normalized);
+      updated += 1;
+    }
+  }
+  return updated;
 }
 
 function seedInitialEmployees_() {
@@ -1768,7 +1818,9 @@ function seedInitialEmployees_() {
       blankable_(employee.comp.quarterly),
       blankable_(employee.comp.pto),
       blankable_(employee.comp.nonPto),
-      employee.notes
+      employee.notes,
+      CONFIG.defaultPtoPlanType,
+      ''
     ]);
   });
 
@@ -2805,7 +2857,7 @@ function getAttendanceWorkflowGuide_() {
           ['Clock Events', 'Append-only clock event ledger.', 'Employees and managers', 'Append only', 'Timestamp, Employee Code, Event Type, Source', 'Do not delete production events; add a corrective manual event instead.'],
           ['Attendance Log', 'Calculated daily status and payroll source.', 'Operations and payroll', 'Limited review', 'Status, Worked Hours, Late Minutes', 'Rebuild after source changes; override only PTO/UTO/Non-PTO/Holiday status.'],
           ['Time Off Requests', 'Pending and approved PTO, UTO, and Non-PTO requests.', 'Employees and managers', 'Via dialog preferred', 'Type, dates, hours/days, status', 'Approve requests before payroll; approved rows rebuild into Attendance Log.'],
-          ['PTO Balances', 'Annual allowance, used, and remaining balances.', 'Operations manager', 'Script-updated', 'PTO and Non-PTO allowance/usage', 'Refresh from menu after comp or request changes.'],
+          ['PTO Balances', 'Fixed Annual or Accrued Monthly PTO days, used days, remaining days, and payout-eligible days.', 'Operations manager', 'Script-updated', 'PTO plan, earned PTO, used PTO, remaining PTO, Non-PTO usage', 'Shows days only, never payout dollars; refresh after comp or request changes.'],
           ['Makeup Hour Requests', 'Pending and approved makeup hours.', 'Employees and managers', 'Via dialog preferred', 'Date, hours, status', 'Approved rows can offset short-hour deductions during payroll calculation.'],
           ['Scorecard', 'Shareable one-employee attendance scorecard.', 'Operations manager', 'Script-rendered', 'Bonus status, stats, exception days', 'Use Attendance > View Scorecard to refresh this tab.']
         ]
@@ -2859,13 +2911,13 @@ function getPayrollWorkflowGuide_() {
         headers: ['Step', 'Owner', 'Action', 'Where', 'When', 'Done When'],
         rows: [
           ['1', 'Operations manager', 'Approve pending time off and makeup requests, then rebuild Attendance Log for the target period.', 'Attendance workbook', 'Before calculation', 'Attendance statuses, approved leave, makeup hours, and late minutes are current.'],
-          ['2', 'Payroll processor', 'Review Compensation Master for blanks and effective dates.', 'Compensation Master', 'Before calculation', 'Every paid employee has an active compensation row.'],
+          ['2', 'Payroll processor', 'Review Compensation Master for blanks, effective dates, PTO Plan Type, and Monthly PTO Accrual Days.', 'Compensation Master', 'Before calculation', 'Every paid employee has an active compensation row and PTO plan terms are intentional.'],
           ['3', 'Payroll processor', 'Confirm or create the target pay period.', 'Pay Periods', 'Each run', 'Period ID, dates, type, and status are correct.'],
           ['4', 'Payroll processor', 'Enter KPI approvals, additional bonuses, and adjustments.', 'Payroll menu', 'Before calculation', 'Bonuses & Adjustments has approved entries with descriptions.'],
           ['5', 'Payroll processor', 'Calculate the pay period.', 'Payroll menu', 'Each run', 'Payroll Calculations and Payroll Output are refreshed.'],
           ['6', 'Payroll approver', 'Review warnings, benefits, bonus statuses, deductions, and Needs review rows.', 'Payroll Calculations', 'Before payment', 'Exceptions have notes or correction actions.'],
           ['7', 'Payroll processor', 'Refresh quarterly PA tracking after quarter-end payrolls.', 'Payroll menu', 'Quarter close', 'Quarterly PA Tracker shows eligible employees and reasons.'],
-          ['8', 'Payroll processor', 'Use Compensation Change for raises or changed allowances.', 'Payroll menu', 'When approved', 'A new effective-dated comp row is created and the old row is closed.'],
+          ['8', 'Payroll processor', 'Use Compensation Change for raises, changed allowances, or PTO plan/accrual changes.', 'Payroll menu', 'When approved', 'A new effective-dated comp row is created and the old row is closed.'],
           ['9', 'Payroll processor', 'Use Offboard Employee or Reactivate Employee for lifecycle changes.', 'Payroll menu', 'As needed', 'Lifecycle log is appended and historical rows are retained.'],
           ['10', 'Payroll processor', 'Finalize after approval.', 'Payroll menu', 'After approval', 'Pay Period status is Paid and output is ready for export.']
         ]
@@ -2876,14 +2928,14 @@ function getPayrollWorkflowGuide_() {
         description: 'The private workbook separates compensation inputs from calculated pay output.',
         headers: ['Tab', 'Purpose', 'Primary User', 'Editable?', 'Key Fields', 'UX Rule'],
         rows: [
-          ['Compensation Master', 'Private compensation and benefit setup.', 'Payroll processor', 'Yes', 'Effective dates, salary, benefits, bonuses', 'Leave unknown compensation blank until confirmed.'],
+          ['Compensation Master', 'Private compensation, benefit, and PTO plan setup.', 'Payroll processor', 'Yes', 'Effective dates, salary, benefits, bonuses, PTO Plan Type, Monthly PTO Accrual Days', 'Existing rows default to Fixed Annual; leave unknown dollar values blank until confirmed.'],
           ['Pay Periods', 'Calendar and status control for pay runs.', 'Payroll processor', 'Yes', 'Period ID, Pay Date, Start/End, Status', 'Use one row per pay period and keep IDs stable.'],
           ['Payroll Calculations', 'Detailed calculated pay and deductions.', 'Payroll approver', 'Review only', 'Worked Hours, Deductions, Calculated Total', 'Investigate Needs review before payment.'],
           ['Payroll Output', 'Compact export-facing payroll summary.', 'Payroll processor', 'Review then export', 'Base, Deductions, TOTAL, Status', 'Export only after exceptions are cleared or approved.'],
           ['Employee Lifecycle Log', 'Hire, termination, and reactivation audit.', 'Payroll and operations', 'Yes', 'Event Type, Event Date, Effective Date', 'Capture lifecycle decisions that affect payroll timing.'],
           ['Compensation Change Log', 'Append-only record of compensation changes.', 'Payroll processor', 'Script-updated', 'Field, old value, new value, approver', 'Use Compensation Change so effective dates and retro adjustments are logged.'],
           ['Quarterly PA Tracker', 'Three-month perfect-attendance tracking.', 'Payroll processor', 'Script-updated', 'Quarter, month status, eligibility, bonus', 'Refresh after quarter-end attendance is complete.'],
-          ['Bonuses & Adjustments', 'Approved KPI, bonuses, and adjustments.', 'Payroll processor', 'Append via dialogs', 'Type, description, amount, approver', 'Use menu dialogs so approval metadata is captured.']
+          ['Bonuses & Adjustments', 'Approved KPI, bonuses, adjustments, and eligible accrued PTO payouts.', 'Payroll processor', 'Append via dialogs', 'Type, description, amount, approver', 'Final offboarding payroll can add an Accrued PTO payout Positive Adj; Attendance never shows payout dollars.']
         ]
       },
       {
@@ -2899,6 +2951,8 @@ function getPayrollWorkflowGuide_() {
           ['Short hours deduction', 'Payroll Calculations', 'Short Hours > 0', 'Worked hours are below eight for a scheduled day.', 'Confirm early leave, correction, or override path.', 'Payroll approver'],
           ['Benefits', 'Payroll Calculations', 'Benefits and Benefit Eligible Days', 'Mid-month starts, exits, UTO, or Non-PTO can prorate benefits.', 'Review proration notes before approval.', 'Payroll approver'],
           ['Approved leave', 'Attendance Log', 'Status = PTO, UTO, or Non-PTO', 'A manager approved a time off request.', 'Confirm the approval and dates before paying.', 'Operations manager'],
+          ['PTO plan setup', 'Compensation Master', 'PTO Plan Type and Monthly PTO Accrual Days', 'Accrued Monthly earns only for full calendar months worked; Fixed Annual uses Annual PTO Days.', 'Confirm plan type before refresh or offboarding.', 'Payroll processor'],
+          ['PTO payout', 'Bonuses & Adjustments', 'Positive Adj description starts Accrued PTO payout', 'Only Accrued Monthly unused earned PTO is payout-eligible on offboarding at 1.5x daily base rate.', 'Fixed Annual mid-year unused PTO should not create an adjustment.', 'Payroll approver'],
           ['Makeup hours', 'Payroll Calculations', 'Notes mention approved makeup hours', 'Approved makeup offset short-hour deductions.', 'Confirm unused hours are intentional.', 'Payroll approver'],
           ['Attendance bonus', 'Payroll Calculations', 'Attendance Bonus Status', 'Monthly eligibility is calculated after month close on Mid payrolls.', 'Review the status and notes before approving output.', 'Payroll approver'],
           ['Quarterly PA bonus', 'Quarterly PA Tracker', 'Eligible? = No or amount blank', 'One or more months were not perfect, or bonus amount is blank.', 'Review quarter details and Compensation Master.', 'Payroll processor'],
@@ -2911,8 +2965,8 @@ function getPayrollWorkflowGuide_() {
         description: 'Phase 5 actions preserve history by appending logs and new effective-dated rows.',
         headers: ['Action', 'Where', 'Primary Effect', 'Audit Trail', 'Payroll Effect', 'Owner'],
         rows: [
-          ['Compensation Change', 'Payroll menu', 'Closes current Compensation Master row and appends a new one.', 'Compensation Change Log', 'Optional retroactive adjustment added to Bonuses & Adjustments.', 'Payroll processor'],
-          ['Offboard Employee', 'Payroll menu', 'Sets employee end date, closes schedule and comp rows, then marks status Resigned or Terminated.', 'Employee Lifecycle Log', 'Creates and calculates a FINAL pay period for the employee.', 'Payroll processor'],
+          ['Compensation Change', 'Payroll menu', 'Closes current Compensation Master row and appends a new one, including PTO plan fields when changed.', 'Compensation Change Log', 'Optional retroactive adjustment added to Bonuses & Adjustments.', 'Payroll processor'],
+          ['Offboard Employee', 'Payroll menu', 'Sets employee end date, closes schedule and comp rows, then marks status Resigned or Terminated.', 'Employee Lifecycle Log', 'Creates and calculates a FINAL pay period; Accrued Monthly unused PTO can be added as a Positive Adj at 1.5x base daily rate.', 'Payroll processor'],
           ['Reactivate Employee', 'Payroll menu', 'Sets employee Active and appends fresh schedule and compensation rows.', 'Employee Lifecycle Log', 'New terms apply from the new start date.', 'Payroll processor'],
           ['View logs', 'Payroll menu', 'Jumps to the audit log tabs.', 'No edit required', 'Use logs during approval review.', 'Payroll approver']
         ]
@@ -3254,7 +3308,7 @@ function applyAttendanceFormatting_(ss) {
   getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests).getRange('F:F').setNumberFormat('0.00');
   getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests).getRange('J:J').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
   getSheet_(ss, CONFIG.attendanceTabs.ptoBalances).getRange('B:B').setNumberFormat('0');
-  getSheet_(ss, CONFIG.attendanceTabs.ptoBalances).getRange('C:H').setNumberFormat('0.00');
+  getSheet_(ss, CONFIG.attendanceTabs.ptoBalances).getRange('D:L').setNumberFormat('0.00');
   getSheet_(ss, CONFIG.attendanceTabs.makeupRequests).getRange('C:C').setNumberFormat('yyyy-mm-dd');
   getSheet_(ss, CONFIG.attendanceTabs.makeupRequests).getRange('D:D').setNumberFormat('0.00');
   getSheet_(ss, CONFIG.attendanceTabs.makeupRequests).getRange('H:H').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
@@ -3276,8 +3330,11 @@ function applyPayrollFormatting_(ss) {
   setValidation_(getSheet_(ss, CONFIG.payrollTabs.bonuses), 3, ['KPI', 'Additional', 'Positive Adj', 'Negative Adj']);
   setValidation_(getSheet_(ss, CONFIG.payrollTabs.lifecycle), 3, ['Hired', 'Resigned', 'Terminated', 'Reactivated']);
   setValidation_(getSheet_(ss, CONFIG.payrollTabs.compChanges), 10, ['Yes', 'No']);
+  setValidation_(getSheet_(ss, CONFIG.payrollTabs.comp), 13, CONFIG.ptoPlanTypes);
   getSheet_(ss, CONFIG.payrollTabs.comp).getRange('B:C').setNumberFormat('yyyy-mm-dd');
   getSheet_(ss, CONFIG.payrollTabs.comp).getRange('E:I').setNumberFormat('$#,##0.00');
+  getSheet_(ss, CONFIG.payrollTabs.comp).getRange('J:K').setNumberFormat('0.00');
+  getSheet_(ss, CONFIG.payrollTabs.comp).getRange('N:N').setNumberFormat('0.00');
   getSheet_(ss, CONFIG.payrollTabs.periods).getRange('B:D').setNumberFormat('yyyy-mm-dd');
   getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('D:E').setNumberFormat('yyyy-mm-dd');
   getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('H:J').setNumberFormat('$#,##0.00');
@@ -3733,17 +3790,23 @@ function refreshPtoBalances_(attendance) {
   const employees = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees));
   const requests = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timeOffRequests));
   const compRows = getPayrollCompRowsSafe_();
-  const usage = summarizeApprovedTimeOffUsage_(requests);
   const yearsByEmployee = {};
   const currentYear = new Date().getFullYear();
+  const employeesByCode = {};
 
   employees.forEach(employee => {
     const code = normalizeCode_(employee['Employee Code']);
-    if (!code || (employee.Status && employee.Status !== 'Active')) return;
+    if (!code) return;
+    employeesByCode[code] = employee;
     if (!yearsByEmployee[code]) yearsByEmployee[code] = {};
     yearsByEmployee[code][currentYear] = true;
+    const start = parseDateOrBlank_(employee['Start Date']);
+    const end = parseDateOrBlank_(employee['End Date']);
+    if (start) yearsByEmployee[code][start.getFullYear()] = true;
+    if (end) yearsByEmployee[code][end.getFullYear()] = true;
   });
 
+  const usage = summarizeApprovedTimeOffUsage_(requests);
   Object.keys(usage).forEach(key => {
     const parts = key.split('|');
     const code = parts[0];
@@ -3756,19 +3819,20 @@ function refreshPtoBalances_(attendance) {
   Object.keys(yearsByEmployee).sort().forEach(code => {
     Object.keys(yearsByEmployee[code]).sort().forEach(yearText => {
       const year = Number(yearText);
-      const used = usage[`${code}|${year}`] || { pto: 0, nonPto: 0 };
-      const comp = getCompForYear_(compRows, code, year);
-      const annualPto = comp ? toNumberOrBlank_(comp['Annual PTO Days']) : '';
-      const annualNonPto = comp ? toNumberOrBlank_(comp['Annual Non-PTO Days']) : '';
+      const balance = calculatePtoBalanceForEmployeeYear_(employeesByCode[code], compRows, requests, code, year);
       rows.push([
         code,
         year,
-        annualPto,
-        round2_(used.pto),
-        annualPto === '' ? '' : round2_(annualPto - used.pto),
-        annualNonPto,
-        round2_(used.nonPto),
-        annualNonPto === '' ? '' : round2_(annualNonPto - used.nonPto)
+        balance.ptoPlanType,
+        balance.annualPto,
+        balance.monthlyPtoAccrualDays,
+        balance.earnedPto,
+        balance.usedPto,
+        balance.remainingPto,
+        balance.payoutEligiblePto,
+        balance.annualNonPto,
+        balance.usedNonPto,
+        balance.remainingNonPto
       ]);
     });
   });
@@ -3781,7 +3845,12 @@ function getPtoBalanceSummaryForEmployee_(employeeCode, year) {
   try {
     const attendance = requireAttendanceSpreadsheet_();
     if (!hasSheet_(attendance, CONFIG.attendanceTabs.ptoBalances)) return null;
-    return getPtoBalanceSummariesByEmployee_(attendance, year)[normalizeCode_(employeeCode)] || null;
+    let summaries = getPtoBalanceSummariesByEmployee_(attendance, year);
+    if (!summaries[normalizeCode_(employeeCode)]) {
+      refreshPtoBalances_(attendance);
+      summaries = getPtoBalanceSummariesByEmployee_(attendance, year);
+    }
+    return summaries[normalizeCode_(employeeCode)] || null;
   } catch (error) {
     return null;
   }
@@ -3795,9 +3864,13 @@ function getPtoBalanceSummariesByEmployee_(attendance, year) {
     const code = normalizeCode_(row['Employee Code']);
     if (!code) return;
     summaries[code] = {
+      ptoPlanType: row['PTO Plan Type'] || CONFIG.defaultPtoPlanType,
       annualPto: toNumberOrBlank_(row['Annual PTO Allowance']),
+      monthlyPtoAccrualDays: toNumberOrBlank_(row['Monthly PTO Accrual Days']),
+      earnedPto: toNumberOrBlank_(row['Earned PTO']),
       usedPto: toNumberOrBlank_(row['Used PTO']),
       remainingPto: toNumberOrBlank_(row['Remaining PTO']),
+      payoutEligiblePto: toNumberOrBlank_(row['Payout Eligible PTO']),
       annualNonPto: toNumberOrBlank_(row['Annual Non-PTO Allowance']),
       usedNonPto: toNumberOrBlank_(row['Used Non-PTO']),
       remainingNonPto: toNumberOrBlank_(row['Remaining Non-PTO'])
@@ -3806,8 +3879,86 @@ function getPtoBalanceSummariesByEmployee_(attendance, year) {
   return summaries;
 }
 
-function summarizeApprovedTimeOffUsage_(requests) {
+function calculatePtoBalanceForEmployeeYear_(employee, compRows, requests, employeeCode, year, asOfOverride) {
+  const code = normalizeCode_(employeeCode);
+  const yearEnd = new Date(year, 11, 31);
+  const asOfDate = asOfOverride ? dateOnly_(asOfOverride) : getPtoBalanceAsOfDate_(employee, year);
+  const compDate = minDate_(asOfDate, yearEnd);
+  const comp = getCompForDate_(compRows, code, compDate) || getCompForYear_(compRows, code, year);
+  const planType = normalizePtoPlanType_(comp ? comp['PTO Plan Type'] : '');
+  const used = summarizeApprovedTimeOffUsage_(requests, asOfDate)[`${code}|${year}`] || { pto: 0, nonPto: 0 };
+  const annualPto = comp ? toNumberOrBlank_(comp['Annual PTO Days']) : '';
+  const annualNonPto = comp ? toNumberOrBlank_(comp['Annual Non-PTO Days']) : '';
+  const monthlyAccrual = planType === 'Accrued Monthly'
+    ? (comp ? toNumberOrBlank_(comp['Monthly PTO Accrual Days']) : '')
+    : '';
+  const earnedPto = planType === 'Accrued Monthly'
+    ? calculateAccruedMonthlyPto_(employee, compRows, code, year, asOfDate)
+    : annualPto;
+  const remainingPto = earnedPto === '' ? '' : round2_(earnedPto - used.pto);
+  const payoutEligiblePto = planType === 'Accrued Monthly' && remainingPto !== ''
+    ? round2_(Math.max(0, remainingPto))
+    : 0;
+
+  return {
+    employeeCode: code,
+    year,
+    ptoPlanType: planType,
+    annualPto,
+    monthlyPtoAccrualDays: monthlyAccrual,
+    earnedPto: earnedPto === '' ? '' : round2_(earnedPto),
+    usedPto: round2_(used.pto),
+    remainingPto,
+    payoutEligiblePto,
+    annualNonPto,
+    usedNonPto: round2_(used.nonPto),
+    remainingNonPto: annualNonPto === '' ? '' : round2_(annualNonPto - used.nonPto)
+  };
+}
+
+function getPtoBalanceAsOfDate_(employee, year) {
+  const today = dateOnly_(new Date());
+  const yearEnd = new Date(year, 11, 31);
+  const endDate = employee ? parseDateOrBlank_(employee['End Date']) : null;
+  if (endDate && endDate.getFullYear() === Number(year)) return dateOnly_(endDate);
+  if (Number(year) === today.getFullYear()) return minDate_(today, yearEnd);
+  return yearEnd;
+}
+
+function calculateAccruedMonthlyPto_(employee, compRows, employeeCode, year, asOfDate) {
+  if (!employee) return '';
+  const code = normalizeCode_(employeeCode);
+  const cutoff = minDate_(dateOnly_(asOfDate), new Date(year, 11, 31));
+  let earned = 0;
+  let missingRate = false;
+
+  for (let monthStart = new Date(year, 0, 1); monthStart.getTime() <= cutoff.getTime(); monthStart = addMonths_(monthStart, 1)) {
+    const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0);
+    if (monthEnd.getTime() > cutoff.getTime()) continue;
+    if (!employeeEmployedForFullCalendarMonth_(employee, monthStart, monthEnd)) continue;
+    const comp = getCompForDate_(compRows, code, monthEnd) || getCompForYear_(compRows, code, year);
+    if (!comp || normalizePtoPlanType_(comp['PTO Plan Type']) !== 'Accrued Monthly') continue;
+    const monthlyRate = toNumberOrBlank_(comp['Monthly PTO Accrual Days']);
+    if (monthlyRate === '') {
+      missingRate = true;
+      continue;
+    }
+    earned += monthlyRate;
+  }
+
+  return missingRate ? '' : round2_(earned);
+}
+
+function employeeEmployedForFullCalendarMonth_(employee, monthStart, monthEnd) {
+  const start = parseDateOrBlank_(employee['Start Date']);
+  const end = parseDateOrBlank_(employee['End Date']);
+  return (!start || dateOnly_(start).getTime() <= dateOnly_(monthStart).getTime())
+    && (!end || dateOnly_(end).getTime() >= dateOnly_(monthEnd).getTime());
+}
+
+function summarizeApprovedTimeOffUsage_(requests, cutoffDate) {
   const usage = {};
+  const cutoff = cutoffDate ? dateOnly_(cutoffDate) : null;
   requests.forEach(row => {
     if (row['Status (Pending/Approved/Denied)'] !== 'Approved') return;
     const type = row['Type (PTO/UTO/Non-PTO)'];
@@ -3819,10 +3970,12 @@ function summarizeApprovedTimeOffUsage_(requests) {
     if (!code || !start || !end || units === '') return;
     const totalDays = countInclusiveDays_(start, end);
     if (!totalDays) return;
+    const effectiveEnd = cutoff ? minDate_(dateOnly_(end), cutoff) : dateOnly_(end);
+    if (effectiveEnd.getTime() < dateOnly_(start).getTime()) return;
 
-    for (let year = start.getFullYear(); year <= end.getFullYear(); year += 1) {
+    for (let year = start.getFullYear(); year <= effectiveEnd.getFullYear(); year += 1) {
       const segmentStart = maxDate_(dateOnly_(start), new Date(year, 0, 1));
-      const segmentEnd = minDate_(dateOnly_(end), new Date(year, 11, 31));
+      const segmentEnd = minDate_(effectiveEnd, new Date(year, 11, 31));
       if (segmentStart.getTime() > segmentEnd.getTime()) continue;
       const segmentUnits = units * (countInclusiveDays_(segmentStart, segmentEnd) / totalDays);
       const key = `${code}|${year}`;
@@ -3894,7 +4047,9 @@ function getCompFieldConfig_() {
     { key: 'monthlyKpiBonusMax', header: 'Monthly KPI Bonus (Max)', label: 'Monthly KPI Bonus Max', type: 'number' },
     { key: 'quarterlyPaBonus', header: 'Quarterly PA Bonus', label: 'Quarterly PA Bonus', type: 'number' },
     { key: 'annualPtoDays', header: 'Annual PTO Days', label: 'Annual PTO Days', type: 'number' },
-    { key: 'annualNonPtoDays', header: 'Annual Non-PTO Days', label: 'Annual Non-PTO Days', type: 'number' }
+    { key: 'annualNonPtoDays', header: 'Annual Non-PTO Days', label: 'Annual Non-PTO Days', type: 'number' },
+    { key: 'ptoPlanType', header: 'PTO Plan Type', label: 'PTO Plan Type', type: 'select', options: CONFIG.ptoPlanTypes },
+    { key: 'monthlyPtoAccrualDays', header: 'Monthly PTO Accrual Days', label: 'Monthly PTO Accrual Days', type: 'number' }
   ];
 }
 
@@ -4055,7 +4210,7 @@ function buildFinalPayrollPreview_(attendance, payroll, employeeCode, lastWorkin
     ? ''
     : round2_(monthlyBenefit * (eligibleDays / scheduledInMonth));
   const kpi = getFinalKpiPreview_(attendance, payroll, code, lastDay, plan);
-  const ptoPayout = calculateYearEndPtoPayout_(attendance, payroll, code, lastDay.getFullYear(), lastDay);
+  const ptoPayout = calculatePtoPayoutForOffboarding_(attendance, payroll, code, lastDay.getFullYear(), lastDay);
   return {
     employeeCode: code,
     employee: employee['Display Name'] || employee['Full Name'] || code,
@@ -4074,40 +4229,69 @@ function buildFinalPayrollPreview_(attendance, payroll, employeeCode, lastWorkin
   };
 }
 
-function calculateYearEndPtoPayout_(attendance, payroll, employeeCode, year, rateReferenceDate) {
+function calculatePtoPayoutForOffboarding_(attendance, payroll, employeeCode, year, rateReferenceDate) {
   const code = normalizeCode_(employeeCode);
-  const balance = getPtoBalanceSummaryForEmployee_(code, year);
-  const remainingPto = balance ? toNumberOrBlank_(balance.remainingPto) : '';
-  if (remainingPto === '' || remainingPto <= 0) {
+  const lastDay = dateOnly_(rateReferenceDate);
+  const employee = getEmployeeRowByCodeAnyStatus_(attendance, code);
+  const compRows = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp));
+  const requests = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timeOffRequests));
+  const balance = calculatePtoBalanceForEmployeeYear_(employee, compRows, requests, code, year, lastDay);
+  if (balance.ptoPlanType !== 'Accrued Monthly') {
+    const yearEnd = new Date(year, 11, 31);
     return {
       amount: 0,
-      note: 'Year-end PTO payout: no remaining PTO days are currently available for payout.'
+      eligibleDays: 0,
+      dailyBaseRate: '',
+      ptoPlanType: balance.ptoPlanType,
+      note: lastDay.getTime() < yearEnd.getTime()
+        ? 'PTO payout: $0.00. Fixed Annual PTO is not eligible for unused PTO cash payout before year-end.'
+        : 'PTO payout: $0.00. Fixed Annual PTO does not create an automatic final-payroll payout.'
     };
   }
 
-  const comp = getCurrentCompRow_(payroll, code, rateReferenceDate);
+  const eligiblePto = toNumberOrBlank_(balance.payoutEligiblePto);
+  if (eligiblePto === '' || eligiblePto <= 0) {
+    return {
+      amount: 0,
+      eligibleDays: eligiblePto === '' ? '' : 0,
+      dailyBaseRate: '',
+      ptoPlanType: balance.ptoPlanType,
+      note: 'PTO payout: no remaining accrued PTO days are currently eligible for payout.'
+    };
+  }
+
+  const comp = getCompForDate_(compRows, code, lastDay);
   const monthlyBase = comp ? toNumberOrBlank_(comp['Monthly Base Salary']) : '';
   if (monthlyBase === '') {
     return {
       amount: '',
-      note: 'Year-end PTO payout cannot be estimated because Monthly Base Salary is blank. Benefits are excluded from this calculation.'
+      eligibleDays: eligiblePto,
+      dailyBaseRate: '',
+      ptoPlanType: balance.ptoPlanType,
+      note: 'PTO payout cannot be calculated because Monthly Base Salary is blank. Benefits are excluded from this calculation.'
     };
   }
 
   const schedules = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules));
-  const scheduledDaysInMonth = countScheduledDaysInMonth_(schedules, code, rateReferenceDate);
+  const scheduledDaysInMonth = countScheduledDaysInRateMonth_(schedules, code, lastDay);
   if (!scheduledDaysInMonth) {
     return {
       amount: '',
-      note: 'Year-end PTO payout cannot be estimated because no scheduled days were found for the rate reference month.'
+      eligibleDays: eligiblePto,
+      dailyBaseRate: '',
+      ptoPlanType: balance.ptoPlanType,
+      note: 'PTO payout cannot be calculated because no scheduled days were found for the rate reference month.'
     };
   }
 
   const dailyBaseRate = monthlyBase / scheduledDaysInMonth;
-  const amount = round2_(remainingPto * dailyBaseRate * 1.5);
+  const amount = round2_(eligiblePto * dailyBaseRate * 1.5);
   return {
     amount,
-    note: `Year-end PTO payout estimate only; not included in final payroll. Formula: ${round2_(remainingPto)} remaining PTO day(s) x ${round2_(dailyBaseRate)} daily base rate x 1.5. Benefits excluded.`
+    eligibleDays: round2_(eligiblePto),
+    dailyBaseRate: round2_(dailyBaseRate),
+    ptoPlanType: balance.ptoPlanType,
+    note: `Accrued Monthly PTO payout included in final payroll: ${round2_(eligiblePto)} remaining accrued PTO day(s) x ${round2_(dailyBaseRate)} daily base rate x 1.5. Benefits excluded.`
   };
 }
 
@@ -4154,6 +4338,43 @@ function upsertFinalKpiBonus_(attendance, payroll, employeeCode, finalPeriod, la
     getActiveUserEmail_(),
     new Date()
   ]]);
+}
+
+function upsertFinalPtoPayoutAdjustment_(attendance, payroll, employeeCode, finalPeriod, lastWorkingDay) {
+  const payout = calculatePtoPayoutForOffboarding_(attendance, payroll, employeeCode, lastWorkingDay.getFullYear(), lastWorkingDay);
+  const sheet = getSheet_(payroll, CONFIG.payrollTabs.bonuses);
+  removeFinalPtoPayoutAdjustmentRows_(sheet, finalPeriod.periodId, employeeCode);
+  if (payout.amount === '' || !payout.amount) return payout;
+
+  appendRows_(sheet, [[
+    finalPeriod.periodId,
+    normalizeCode_(employeeCode),
+    'Positive Adj',
+    `Accrued PTO payout: ${round2_(payout.eligibleDays)} day(s) x ${round2_(payout.dailyBaseRate)} daily base rate x 1.5. Benefits excluded.`,
+    round2_(payout.amount),
+    getActiveUserEmail_(),
+    new Date()
+  ]]);
+  return payout;
+}
+
+function removeFinalPtoPayoutAdjustmentRows_(sheet, periodId, employeeCode) {
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return;
+  const headers = values[0];
+  const periodIdx = headers.indexOf('Pay Period ID');
+  const codeIdx = headers.indexOf('Employee Code');
+  const typeIdx = headers.indexOf('Type (KPI / Additional / Positive Adj / Negative Adj)');
+  const descriptionIdx = headers.indexOf('Description');
+  for (let row = values.length - 1; row >= 1; row -= 1) {
+    const matchesPeriod = normalizePeriodId_(values[row][periodIdx]) === normalizePeriodId_(periodId);
+    const matchesCode = normalizeCode_(values[row][codeIdx]) === normalizeCode_(employeeCode);
+    const matchesType = values[row][typeIdx] === 'Positive Adj';
+    const description = String(values[row][descriptionIdx] || '');
+    if (matchesPeriod && matchesCode && matchesType && description.indexOf('Accrued PTO payout:') === 0) {
+      sheet.deleteRow(row + 1);
+    }
+  }
 }
 
 function setEmployeeEndDate_(attendance, employeeCode, endDate) {
@@ -4285,6 +4506,19 @@ function countScheduledDaysInMonth_(schedules, employeeCode, dateInMonth) {
     const schedule = getScheduleForDate_(schedules, employeeCode, cursor);
     const daySchedule = getDaySchedule_(schedule, cursor);
     if (daySchedule.isScheduled) count += 1;
+  }
+  return count;
+}
+
+function countScheduledDaysInRateMonth_(schedules, employeeCode, dateInMonth) {
+  const monthStart = new Date(dateInMonth.getFullYear(), dateInMonth.getMonth(), 1);
+  const monthEnd = new Date(dateInMonth.getFullYear(), dateInMonth.getMonth() + 1, 0);
+  const rateSchedule = getScheduleForDate_(schedules, employeeCode, dateInMonth);
+  if (!rateSchedule) return 0;
+
+  let count = 0;
+  for (let cursor = monthStart; cursor.getTime() <= monthEnd.getTime(); cursor = addDays_(cursor, 1)) {
+    if (getDaySchedule_(rateSchedule, cursor).isScheduled) count += 1;
   }
   return count;
 }
@@ -4466,6 +4700,11 @@ function suggestEmployeeCode_(name) {
 
 function normalizeCode_(value) {
   return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+}
+
+function normalizePtoPlanType_(value) {
+  const text = String(value || '').trim();
+  return CONFIG.ptoPlanTypes.indexOf(text) !== -1 ? text : CONFIG.defaultPtoPlanType;
 }
 
 function blankable_(value) {

@@ -235,7 +235,7 @@
             ${metric('KPI Proration', money(preview.kpi && preview.kpi.proratedAmount))}
             ${metric('Eligible Days', `${preview.eligibleDays || 0}/${preview.scheduledInMonth || 0}`)}
             ${metric('Source Period', preview.sourcePeriodId || 'None')}
-            ${metric('Year-End PTO', money(preview.ptoPayout))}
+            ${metric('PTO Payout', money(preview.ptoPayout))}
           </div>
           <div class="note">${escapeHtml(preview.kpi ? preview.kpi.note : '')}<br>${escapeHtml(preview.ptoPayoutNote || '')}</div>
         `;

@@ -307,7 +307,7 @@
 
       function formatBalance(balance) {
         if (!balance) return 'Balance blank';
-        return `PTO ${formatNumber(balance.remainingPto)} | Non-PTO ${formatNumber(balance.remainingNonPto)}`;
+        return `${balance.ptoPlanType || 'PTO'} | earned ${formatNumber(balance.earnedPto)} | remaining ${formatNumber(balance.remainingPto)} | Non-PTO ${formatNumber(balance.remainingNonPto)}`;
       }
 
       function formatNumber(value) {

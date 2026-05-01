@@ -388,6 +388,7 @@
           <p class="eyebrow">Employee Request</p>
           <h1>Time Off</h1>
           <p class="request-note">Requests stay pending until a manager approves them.</p>
+          ${renderBalanceLine(latestState.ptoBalance)}
           <label for="requestType">Type</label>
           <select id="requestType">${typeOptions}</select>
           <label for="startDate">Start Date</label>
@@ -510,9 +511,11 @@
 
       function renderBalanceLine(balance) {
         if (!balance) return '';
+        const plan = balance.ptoPlanType || 'PTO';
+        const earned = formatBalance(balance.earnedPto);
         const pto = formatBalance(balance.remainingPto);
         const nonPto = formatBalance(balance.remainingNonPto);
-        return `<p class="balance-line">Current year balance: PTO ${escapeHtml(pto)} | Non-PTO ${escapeHtml(nonPto)}</p>`;
+        return `<p class="balance-line">Current year balance: ${escapeHtml(plan)} PTO earned ${escapeHtml(earned)}, remaining ${escapeHtml(pto)} | Non-PTO ${escapeHtml(nonPto)}</p>`;
       }
 
       function formatBalance(value) {

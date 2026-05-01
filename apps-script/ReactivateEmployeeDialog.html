@@ -214,6 +214,8 @@
           <div><label for="monthlyKpiBonusMax">Monthly KPI Bonus Max</label><input id="monthlyKpiBonusMax" type="number" min="0" step="0.01"></div>
           <div><label for="quarterlyPaBonus">Quarterly PA Bonus</label><input id="quarterlyPaBonus" type="number" min="0" step="0.01"></div>
           <div><label for="annualPtoDays">Annual PTO Days</label><input id="annualPtoDays" type="number" min="0" step="0.25"></div>
+          <div><label for="ptoPlanType">PTO Plan Type</label><select id="ptoPlanType"></select></div>
+          <div><label for="monthlyPtoAccrualDays">Monthly PTO Accrual Days</label><input id="monthlyPtoAccrualDays" type="number" min="0" step="0.25"></div>
           <div><label for="annualNonPtoDays">Annual Non-PTO Days</label><input id="annualNonPtoDays" type="number" min="0" step="0.25"></div>
           <div class="full"><label for="notes">Notes</label><textarea id="notes"></textarea></div>
         </div>
@@ -244,6 +246,10 @@
             document.getElementById('employeeCode').innerHTML = (data.employees || [])
               .map(employee => `<option value="${escapeAttr(employee.employeeCode)}">${escapeHtml(employee.displayName)} (${escapeHtml(employee.employeeCode)})</option>`)
               .join('');
+            document.getElementById('ptoPlanType').innerHTML = (data.ptoPlanTypes || ['Fixed Annual', 'Accrued Monthly'])
+              .map(plan => `<option value="${escapeAttr(plan)}">${escapeHtml(plan)}</option>`)
+              .join('');
+            document.getElementById('ptoPlanType').value = data.defaultPtoPlanType || 'Fixed Annual';
             document.getElementById('startDate').value = data.today || '';
             setStatus('Ready.');
             loadEmployee();
@@ -306,7 +312,9 @@
             monthlyKpiBonusMax: value('monthlyKpiBonusMax'),
             quarterlyPaBonus: value('quarterlyPaBonus'),
             annualPtoDays: value('annualPtoDays'),
-            annualNonPtoDays: value('annualNonPtoDays')
+            annualNonPtoDays: value('annualNonPtoDays'),
+            ptoPlanType: value('ptoPlanType'),
+            monthlyPtoAccrualDays: value('monthlyPtoAccrualDays')
           },
           notes: value('notes')
         };

@@ -110,9 +110,10 @@
         margin-top: 6px;
         color: var(--ink-primary);
         font-family: var(--serif);
-        font-size: 28px;
+        font-size: 26px;
         line-height: 1;
         font-variant-numeric: tabular-nums;
+        overflow-wrap: anywhere;
       }
       .status {
         min-height: 22px;
@@ -167,6 +168,14 @@
         </div>
         <div class="full">
           <div class="balance">
+            <div class="metric">
+              <div class="metric-label">PTO Plan</div>
+              <div id="ptoPlanType" class="metric-value">Blank</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">PTO Earned</div>
+              <div id="ptoEarned" class="metric-value">Blank</div>
+            </div>
             <div class="metric">
               <div class="metric-label">PTO Remaining</div>
               <div id="ptoRemaining" class="metric-value">Blank</div>
@@ -231,6 +240,8 @@
 
       function renderBalance() {
         const balance = balances[value('employeeCode')] || {};
+        document.getElementById('ptoPlanType').textContent = balance.ptoPlanType || 'Blank';
+        document.getElementById('ptoEarned').textContent = formatBalance(balance.earnedPto);
         document.getElementById('ptoRemaining').textContent = formatBalance(balance.remainingPto);
         document.getElementById('nonPtoRemaining').textContent = formatBalance(balance.remainingNonPto);
       }

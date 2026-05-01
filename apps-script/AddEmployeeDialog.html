@@ -316,6 +316,14 @@
             <input id="annualPtoDays" type="number" min="0" step="0.25">
           </div>
           <div class="field">
+            <label for="ptoPlanType">PTO Plan Type</label>
+            <select id="ptoPlanType"></select>
+          </div>
+          <div class="field">
+            <label for="monthlyPtoAccrualDays">Monthly PTO Accrual Days</label>
+            <input id="monthlyPtoAccrualDays" type="number" min="0" step="0.25">
+          </div>
+          <div class="field">
             <label for="annualNonPtoDays">Annual Non-PTO Days</label>
             <input id="annualNonPtoDays" type="number" min="0" step="0.25">
           </div>
@@ -351,6 +359,11 @@
         google.script.run
           .withSuccessHandler(defaults => {
             document.getElementById('startDate').value = defaults.today || '';
+            const plans = defaults.ptoPlanTypes || ['Fixed Annual', 'Accrued Monthly'];
+            document.getElementById('ptoPlanType').innerHTML = plans
+              .map(plan => `<option value="${escapeAttr(plan)}">${escapeHtml(plan)}</option>`)
+              .join('');
+            document.getElementById('ptoPlanType').value = defaults.defaultPtoPlanType || 'Fixed Annual';
           })
           .getAddEmployeeDefaults();
       }
@@ -416,7 +429,9 @@
             monthlyKpiBonusMax: value('monthlyKpiBonusMax'),
             quarterlyPaBonus: value('quarterlyPaBonus'),
             annualPtoDays: value('annualPtoDays'),
-            annualNonPtoDays: value('annualNonPtoDays')
+            annualNonPtoDays: value('annualNonPtoDays'),
+            ptoPlanType: value('ptoPlanType'),
+            monthlyPtoAccrualDays: value('monthlyPtoAccrualDays')
           } : {},
           notes: value('notes')
         };
@@ -434,6 +449,19 @@
         const node = document.getElementById('status');
         node.textContent = message || '';
         node.className = isError ? 'status error' : 'status';
+      }
+
+      function escapeHtml(value) {
+        return String(value == null ? '' : value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      function escapeAttr(value) {
+        return escapeHtml(value).replace(/`/g, '&#096;');
       }
 
       init();
