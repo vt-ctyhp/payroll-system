@@ -202,7 +202,15 @@
       function init() {
         google.script.run
           .withSuccessHandler(data => {
-            document.getElementById('periodId').innerHTML = data.periods.map(period => {
+            const periods = data.periods || [];
+            if (!periods.length) {
+              document.getElementById('periodId').innerHTML = '';
+              document.getElementById('employeeRows').innerHTML = '<tr><td colspan="5">No pay periods found.</td></tr>';
+              setStatus('No pay periods were found. Run setupPhase1(), then reopen this dialog.', true);
+              setBusy(false);
+              return;
+            }
+            document.getElementById('periodId').innerHTML = periods.map(period => {
               const label = `${period.periodId} | ${period.periodStart} to ${period.periodEnd} | ${period.type} | ${period.status}`;
               return `<option value="${escapeAttr(period.periodId)}" ${period.periodId === data.defaultPeriodId ? 'selected' : ''}>${escapeHtml(label)}</option>`;
             }).join('');
@@ -214,7 +222,11 @@
 
       function loadPeriod() {
         const periodId = document.getElementById('periodId').value;
-        if (!periodId) return;
+        if (!periodId) {
+          document.getElementById('employeeRows').innerHTML = '<tr><td colspan="5">Select a pay period first.</td></tr>';
+          setStatus('Select a pay period first.', true);
+          return;
+        }
         setBusy(true);
         setStatus('Loading employee KPI max values.');
         google.script.run

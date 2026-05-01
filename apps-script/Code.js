@@ -815,6 +815,7 @@ function getScorecardDialogData() {
 function getKpiBonusDialogData() {
   const payroll = requirePayrollSpreadsheet_();
   ensurePhase3PayrollSheets_(payroll);
+  ensurePayPeriodsForDialog_(payroll);
   const periods = listPayPeriodsForUi_();
   return {
     periods,
@@ -1721,6 +1722,13 @@ function ensurePhase3PayrollSheets_(payroll) {
     setValidation_(sheet, 3, ['KPI', 'Additional', 'Positive Adj', 'Negative Adj']);
     sheet.getRange('E:E').setNumberFormat('$#,##0.00');
     sheet.getRange('G:G').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
+  }
+}
+
+function ensurePayPeriodsForDialog_(payroll) {
+  const sheet = getSheet_(payroll, CONFIG.payrollTabs.periods);
+  if (!readObjects_(sheet).length) {
+    seedPayPeriods_(payroll, new Date().getFullYear());
   }
 }
 
