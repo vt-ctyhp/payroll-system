@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        color-scheme: light;
+        --bg-foundation: #F7F1EB;
+        --surface-card: #FBF7F1;
+        --surface-inset: #EFE8DD;
+        --ink-primary: #2A2725;
+        --ink-body: #4A4540;
+        --ink-muted: #8A8178;
+        --rule: #D4CFC4;
+        --accent: #E91D79;
+        --serif: 'Cormorant Garamond', Georgia, serif;
+        --sans: 'Inter', system-ui, -apple-system, sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg-foundation);
+        color: var(--ink-body);
+        font: 14px/1.5 var(--sans);
+        -webkit-font-smoothing: antialiased;
+      }
+      form { padding: 28px 28px 0; }
+      h2 {
+        margin: 0;
+        color: var(--ink-primary);
+        font-family: var(--serif);
+        font-size: 24px;
+        font-weight: 400;
+        line-height: 1.15;
+      }
+      .eyebrow,
+      label,
+      button,
+      th {
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      .eyebrow,
+      label,
+      th { color: var(--ink-muted); }
+      .section {
+        margin-top: 30px;
+      }
+      .section:first-of-type { margin-top: 0; }
+      .section-head {
+        margin-bottom: 20px;
+        padding-bottom: 16px;
+        border-bottom: 1px solid var(--rule);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 20px 24px;
+      }
+      .full { grid-column: 1 / -1; }
+      label { display: block; margin-bottom: 6px; }
+      select,
+      input,
+      textarea {
+        width: 100%;
+        min-height: 38px;
+        border: 0;
+        border-bottom: 1px solid var(--rule);
+        border-radius: 0;
+        padding: 6px 2px;
+        background: transparent;
+        color: var(--ink-primary);
+        font: inherit;
+        font-size: 15px;
+        font-variant-numeric: tabular-nums;
+        appearance: none;
+        -webkit-appearance: none;
+      }
+      select:focus,
+      input:focus,
+      textarea:focus {
+        outline: none;
+        border-bottom: 2px solid var(--accent);
+        padding-bottom: 5px;
+      }
+      textarea { min-height: 84px; resize: vertical; }
+      input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        min-height: auto;
+        accent-color: var(--accent);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th,
+      td {
+        padding: 10px 8px;
+        border-bottom: 1px solid var(--rule);
+        text-align: left;
+        vertical-align: middle;
+      }
+      th {
+        border-top: 1px solid var(--rule);
+        background: var(--surface-inset);
+      }
+      td { font-variant-numeric: tabular-nums; }
+      td:first-child { width: 64px; }
+      td:nth-child(2) { width: 70px; text-align: center; }
+      .status {
+        min-height: 22px;
+        margin: 18px 0 0;
+        color: var(--ink-muted);
+        font-size: 13px;
+      }
+      .error { color: var(--accent); }
+      .actions {
+        position: sticky;
+        bottom: 0;
+        display: flex;
+        justify-content: flex-end;
+        gap: 12px;
+        margin: 28px -28px 0;
+        padding: 18px 28px;
+        border-top: 2px solid var(--accent);
+        background: var(--bg-foundation);
+      }
+      button {
+        min-height: 42px;
+        padding: 0 22px;
+        border: 1px solid var(--ink-primary);
+        border-radius: 0;
+        background: transparent;
+        color: var(--ink-primary);
+        font-family: var(--sans);
+        cursor: pointer;
+      }
+      button:hover:not(:disabled),
+      button.primary {
+        background: var(--ink-primary);
+        color: var(--bg-foundation);
+      }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+    </style>
+  </head>
+  <body>
+    <form onsubmit="submitForm(event)">
+      <div class="section">
+        <div class="section-head">
+          <p class="eyebrow">Lifecycle Control</p>
+          <h2>Reactivate Employee</h2>
+        </div>
+        <div class="grid">
+          <div class="full">
+            <label for="employeeCode">Employee</label>
+            <select id="employeeCode" onchange="loadEmployee()" required></select>
+          </div>
+          <div>
+            <label for="startDate">New Start Date</label>
+            <input id="startDate" type="date" required>
+          </div>
+          <div>
+            <label for="reason">Reason</label>
+            <input id="reason" required>
+          </div>
+          <div>
+            <label for="position">Position</label>
+            <input id="position">
+          </div>
+          <div>
+            <label for="manager">Manager</label>
+            <input id="manager">
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head">
+          <p class="eyebrow">New Terms</p>
+          <h2>Work Schedule</h2>
+        </div>
+        <table>
+          <thead><tr><th>Day</th><th>Works</th><th>Start</th><th>End</th></tr></thead>
+          <tbody id="scheduleRows"></tbody>
+        </table>
+        <div class="grid" style="margin-top:20px;">
+          <div>
+            <label for="lunchStart">Scheduled Lunch Start</label>
+            <input id="lunchStart" type="number" min="0" max="24" step="0.25" value="13">
+          </div>
+          <div>
+            <label for="lunchEnd">Scheduled Lunch End</label>
+            <input id="lunchEnd" type="number" min="0" max="24" step="0.25" value="14">
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head">
+          <p class="eyebrow">New Offer</p>
+          <h2>Compensation</h2>
+        </div>
+        <div class="grid">
+          <div><label for="rampTier">Ramp Tier</label><input id="rampTier"></div>
+          <div><label for="monthlyBaseSalary">Monthly Base Salary</label><input id="monthlyBaseSalary" type="number" min="0" step="0.01"></div>
+          <div><label for="monthlyBenefits">Monthly Benefits</label><input id="monthlyBenefits" type="number" min="0" step="0.01"></div>
+          <div><label for="monthlyAttendanceBonus">Monthly Attendance Bonus</label><input id="monthlyAttendanceBonus" type="number" min="0" step="0.01"></div>
+          <div><label for="monthlyKpiBonusMax">Monthly KPI Bonus Max</label><input id="monthlyKpiBonusMax" type="number" min="0" step="0.01"></div>
+          <div><label for="quarterlyPaBonus">Quarterly PA Bonus</label><input id="quarterlyPaBonus" type="number" min="0" step="0.01"></div>
+          <div><label for="annualPtoDays">Annual PTO Days</label><input id="annualPtoDays" type="number" min="0" step="0.25"></div>
+          <div><label for="annualNonPtoDays">Annual Non-PTO Days</label><input id="annualNonPtoDays" type="number" min="0" step="0.25"></div>
+          <div class="full"><label for="notes">Notes</label><textarea id="notes"></textarea></div>
+        </div>
+      </div>
+
+      <p id="status" class="status">Loading...</p>
+
+      <div class="actions">
+        <button type="button" onclick="google.script.host.close()">Cancel</button>
+        <button id="saveButton" class="primary" type="submit">Reactivate</button>
+      </div>
+    </form>
+
+    <script>
+      const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+      function init() {
+        document.getElementById('scheduleRows').innerHTML = DAYS.map(day => `
+          <tr>
+            <td>${day}</td>
+            <td><input id="${day}Enabled" type="checkbox" ${['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].includes(day) ? 'checked' : ''}></td>
+            <td><input id="${day}Start" type="number" min="0" max="24" step="0.25" value="10"></td>
+            <td><input id="${day}End" type="number" min="0" max="24" step="0.25" value="19"></td>
+          </tr>
+        `).join('');
+        google.script.run
+          .withSuccessHandler(data => {
+            document.getElementById('employeeCode').innerHTML = (data.employees || [])
+              .map(employee => `<option value="${escapeAttr(employee.employeeCode)}">${escapeHtml(employee.displayName)} (${escapeHtml(employee.employeeCode)})</option>`)
+              .join('');
+            document.getElementById('startDate').value = data.today || '';
+            setStatus('Ready.');
+            loadEmployee();
+          })
+          .withFailureHandler(showError)
+          .getReactivateDialogData();
+      }
+
+      function loadEmployee() {
+        if (!value('employeeCode')) return;
+        google.script.run
+          .withSuccessHandler(data => {
+            document.getElementById('position').value = data.position || '';
+            document.getElementById('manager').value = data.manager || '';
+          })
+          .withFailureHandler(showError)
+          .getReactivateEmployeeData(value('employeeCode'));
+      }
+
+      function submitForm(event) {
+        event.preventDefault();
+        setBusy(true);
+        setStatus('Reactivating employee.');
+        google.script.run
+          .withSuccessHandler(result => {
+            setStatus(result.message || 'Employee reactivated.');
+            setBusy(false);
+          })
+          .withFailureHandler(error => {
+            showError(error);
+            setBusy(false);
+          })
+          .reactivateEmployee(collectPayload());
+      }
+
+      function collectPayload() {
+        const schedule = {
+          lunchStart: value('lunchStart'),
+          lunchEnd: value('lunchEnd')
+        };
+        DAYS.forEach(day => {
+          schedule[day] = {
+            enabled: document.getElementById(`${day}Enabled`).checked,
+            start: value(`${day}Start`),
+            end: value(`${day}End`)
+          };
+        });
+        return {
+          employeeCode: value('employeeCode'),
+          startDate: value('startDate'),
+          reason: value('reason'),
+          position: value('position'),
+          manager: value('manager'),
+          schedule,
+          comp: {
+            rampTier: value('rampTier'),
+            monthlyBaseSalary: value('monthlyBaseSalary'),
+            monthlyBenefits: value('monthlyBenefits'),
+            monthlyAttendanceBonus: value('monthlyAttendanceBonus'),
+            monthlyKpiBonusMax: value('monthlyKpiBonusMax'),
+            quarterlyPaBonus: value('quarterlyPaBonus'),
+            annualPtoDays: value('annualPtoDays'),
+            annualNonPtoDays: value('annualNonPtoDays')
+          },
+          notes: value('notes')
+        };
+      }
+
+      function value(id) {
+        const node = document.getElementById(id);
+        return node ? node.value.trim() : '';
+      }
+
+      function setBusy(isBusy) {
+        document.getElementById('saveButton').disabled = isBusy;
+      }
+
+      function setStatus(message, isError) {
+        const node = document.getElementById('status');
+        node.textContent = message || '';
+        node.className = isError ? 'status error' : 'status';
+      }
+
+      function showError(error) {
+        setStatus(error && error.message ? error.message : String(error), true);
+      }
+
+      function escapeHtml(value) {
+        return String(value == null ? '' : value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      function escapeAttr(value) {
+        return escapeHtml(value).replace(/`/g, '&#096;');
+      }
+
+      init();
+    </script>
+  </body>
+</html>

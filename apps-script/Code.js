@@ -42,6 +42,7 @@ const CONFIG = {
     calculations: 'Payroll Calculations',
     output: 'Payroll Output',
     lifecycle: 'Employee Lifecycle Log',
+    compChanges: 'Compensation Change Log',
     paTracker: 'Quarterly PA Tracker',
     bonuses: 'Bonuses & Adjustments'
   },
@@ -220,6 +221,19 @@ const HEADERS = {
   ],
   output: ['Employee', 'Period', 'Base', 'Deductions', 'Benefits', 'Att. Bonus', 'KPI Bonus', 'Other Bonus', 'Adjustments', 'TOTAL', 'Status', 'Notes'],
   bonuses: ['Pay Period ID', 'Employee Code', 'Type (KPI / Additional / Positive Adj / Negative Adj)', 'Description', 'Amount', 'Approved By', 'Approved At'],
+  compChanges: [
+    'Change ID',
+    'Employee Code',
+    'Change Date',
+    'Effective From',
+    'Field Changed',
+    'Old Value',
+    'New Value',
+    'Reason',
+    'Approved By',
+    'Retroactive?',
+    'Retroactive Adjustment Amount'
+  ],
   lifecycle: [
     'Event ID',
     'Employee Code',
@@ -491,6 +505,13 @@ function addPayrollMenu_() {
     .addItem('Enter Adjustment...', 'showAdjustmentDialog')
     .addItem('Finalize & Mark as Paid', 'markSelectedPayPeriodPaidFromMenu')
     .addSeparator()
+    .addItem('Compensation Change...', 'showCompensationChangeDialog')
+    .addItem('View Compensation Change Log', 'showCompensationChangeLog')
+    .addSeparator()
+    .addItem('Offboard Employee...', 'showOffboardEmployeeDialog')
+    .addItem('Reactivate Employee...', 'showReactivateEmployeeDialog')
+    .addItem('View Employee Lifecycle Log', 'showEmployeeLifecycleLog')
+    .addSeparator()
     .addItem('Add New Employee...', 'showAddEmployeeDialog')
     .addSeparator()
     .addItem('Export Payroll Output (CSV)', 'exportPayrollOutputCsv')
@@ -508,7 +529,7 @@ function showClockAppUrl() {
 function showAboutHelp() {
   SpreadsheetApp.getUi().alert(
     'Payroll & Attendance',
-    'The current build includes self-service clock events, attendance log rebuilding, employee onboarding, payroll calculations, bonuses, adjustments, PTO/Non-PTO balance tracking, time off approvals, and makeup-hour approvals. Compensation values left blank in the PRD remain blank in Compensation Master.',
+    'The current build includes self-service clock events, attendance log rebuilding, employee onboarding, payroll calculations, bonuses, adjustments, PTO/Non-PTO balance tracking, time off approvals, makeup-hour approvals, compensation changes, offboarding, reactivation, and lifecycle audit logs. Compensation values left blank in the PRD remain blank in Compensation Master.',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
@@ -591,6 +612,33 @@ function showAdjustmentDialog() {
   template.entryMode = 'adjustment';
   const html = template.evaluate().setWidth(620).setHeight(600);
   SpreadsheetApp.getUi().showModalDialog(html, 'Enter Adjustment');
+}
+
+function showCompensationChangeDialog() {
+  const html = HtmlService.createHtmlOutputFromFile('CompensationChangeDialog').setWidth(860).setHeight(760);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Compensation Change');
+}
+
+function showOffboardEmployeeDialog() {
+  const html = HtmlService.createHtmlOutputFromFile('OffboardEmployeeDialog').setWidth(760).setHeight(720);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Offboard Employee');
+}
+
+function showReactivateEmployeeDialog() {
+  const html = HtmlService.createHtmlOutputFromFile('ReactivateEmployeeDialog').setWidth(860).setHeight(760);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Reactivate Employee');
+}
+
+function showCompensationChangeLog() {
+  const payroll = requirePayrollSpreadsheet_();
+  setupPayrollSpreadsheet_(payroll);
+  payroll.setActiveSheet(getSheet_(payroll, CONFIG.payrollTabs.compChanges));
+}
+
+function showEmployeeLifecycleLog() {
+  const payroll = requirePayrollSpreadsheet_();
+  setupPayrollSpreadsheet_(payroll);
+  payroll.setActiveSheet(getSheet_(payroll, CONFIG.payrollTabs.lifecycle));
 }
 
 function rebuildAttendanceLogFromMenu() {
@@ -1209,6 +1257,284 @@ function addBonusAdjustment(payload) {
   };
 }
 
+function getCompensationChangeDialogData() {
+  const payroll = requirePayrollSpreadsheet_();
+  const attendance = requireAttendanceSpreadsheet_();
+  setupPayrollSpreadsheet_(payroll);
+  setupAttendanceSpreadsheet_(attendance);
+  const periods = listPayPeriodsForUi_();
+  return {
+    employees: listEmployeesForLifecycleUi_(['Active', '']),
+    periods,
+    defaultEffectiveFrom: formatDateKey_(getFirstDayOfNextMonth_()),
+    defaultAdjustmentPeriodId: getDefaultOpenPeriodId_(periods)
+  };
+}
+
+function getCompensationChangeEmployeeData(employeeCode) {
+  const payroll = requirePayrollSpreadsheet_();
+  setupPayrollSpreadsheet_(payroll);
+  const code = normalizeCode_(employeeCode);
+  const current = getCurrentCompRow_(payroll, code, new Date());
+  if (!current) throw new Error(`${code} has no current compensation row.`);
+  return {
+    employeeCode: code,
+    effectiveFrom: displayDate_(current['Effective From']),
+    effectiveTo: displayDate_(current['Effective To']),
+    fields: getCompFieldConfig_().map(field => ({
+      key: field.key,
+      header: field.header,
+      label: field.label,
+      type: field.type,
+      value: blankable_(current[field.header])
+    }))
+  };
+}
+
+function saveCompensationChange(payload) {
+  payload = payload || {};
+  const payroll = requirePayrollSpreadsheet_();
+  const attendance = requireAttendanceSpreadsheet_();
+  setupPayrollSpreadsheet_(payroll);
+  setupAttendanceSpreadsheet_(attendance);
+
+  const code = normalizeCode_(payload.employeeCode);
+  const effectiveFrom = parseDateOrBlank_(payload.effectiveFrom);
+  const reason = String(payload.reason || '').trim();
+  if (!code) throw new Error('Select an employee.');
+  if (!effectiveFrom) throw new Error('Effective From is required.');
+  if (!reason) throw new Error('Reason is required.');
+
+  const compSheet = getSheet_(payroll, CONFIG.payrollTabs.comp);
+  const current = getCurrentCompRow_(payroll, code, effectiveFrom);
+  if (!current) throw new Error(`${code} has no compensation row active on ${formatDateKey_(effectiveFrom)}.`);
+  const currentFrom = parseDateOrBlank_(current['Effective From']);
+  if (currentFrom && dateOnly_(effectiveFrom).getTime() <= dateOnly_(currentFrom).getTime()) {
+    throw new Error(`Effective From must be after the current row start date (${displayDate_(currentFrom)}).`);
+  }
+
+  const fields = getCompFieldConfig_();
+  const newComp = payload.newComp || {};
+  const changes = [];
+  const nextValues = {};
+  fields.forEach(field => {
+    const oldValue = blankable_(current[field.header]);
+    const rawValue = newComp[field.key];
+    const hasNewValue = rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== '';
+    let newValue = oldValue;
+    if (hasNewValue) {
+      newValue = field.type === 'number' ? toNumberOrBlank_(rawValue) : String(rawValue).trim();
+      if (field.type === 'number' && newValue === '') throw new Error(`${field.label} must be numeric.`);
+      if (normalizeCompComparable_(oldValue) !== normalizeCompComparable_(newValue)) {
+        changes.push({ field, oldValue, newValue });
+      }
+    }
+    nextValues[field.header] = newValue;
+  });
+  if (!changes.length) throw new Error('Enter at least one changed compensation value.');
+
+  compSheet.getRange(current._rowNumber, 3).setValue(addDays_(dateOnly_(effectiveFrom), -1));
+  appendRows_(compSheet, [[
+    code,
+    dateOnly_(effectiveFrom),
+    '',
+    nextValues['Ramp Tier'],
+    toNumberOrBlank_(nextValues['Monthly Base Salary']),
+    toNumberOrBlank_(nextValues['Monthly Benefits']),
+    toNumberOrBlank_(nextValues['Monthly Attendance Bonus']),
+    toNumberOrBlank_(nextValues['Monthly KPI Bonus (Max)']),
+    toNumberOrBlank_(nextValues['Quarterly PA Bonus']),
+    toNumberOrBlank_(nextValues['Annual PTO Days']),
+    toNumberOrBlank_(nextValues['Annual Non-PTO Days']),
+    String(payload.notes || '').trim() || reason
+  ]]);
+
+  const retroactive = Boolean(payload.retroactive);
+  const retroAdjustment = retroactive
+    ? createRetroactiveCompAdjustment_(attendance, payroll, code, current, nextValues, payload)
+    : { amount: '', periodId: '' };
+  const approvedBy = getActiveUserEmail_();
+  const changeDate = new Date();
+  const logRows = changes.map(change => [
+    makeId_('COMP'),
+    code,
+    changeDate,
+    dateOnly_(effectiveFrom),
+    change.field.header,
+    change.oldValue,
+    change.newValue,
+    reason,
+    approvedBy,
+    retroactive ? 'Yes' : 'No',
+    change.field.header === 'Monthly Base Salary' ? retroAdjustment.amount : ''
+  ]);
+  appendRows_(getSheet_(payroll, CONFIG.payrollTabs.compChanges), logRows);
+
+  if (changes.some(change => ['Annual PTO Days', 'Annual Non-PTO Days'].indexOf(change.field.header) !== -1)) {
+    refreshPtoBalances_(attendance);
+  }
+  applyPayrollFormatting_(payroll);
+  applyAttendanceFormatting_(attendance);
+  return {
+    message: `${changes.length} compensation field(s) changed for ${code}.${retroAdjustment.periodId ? ` Retroactive adjustment added to ${retroAdjustment.periodId}.` : ''}`
+  };
+}
+
+function getOffboardDialogData() {
+  const payroll = requirePayrollSpreadsheet_();
+  const attendance = requireAttendanceSpreadsheet_();
+  setupPayrollSpreadsheet_(payroll);
+  setupAttendanceSpreadsheet_(attendance);
+  return {
+    employees: listEmployeesForLifecycleUi_(['Active', '']),
+    today: formatDateKey_(new Date()),
+    eventTypes: ['Resigned', 'Terminated']
+  };
+}
+
+function getOffboardPreview(payload) {
+  payload = payload || {};
+  const code = normalizeCode_(payload.employeeCode);
+  const lastWorkingDay = parseDateOrBlank_(payload.lastWorkingDay);
+  if (!code) throw new Error('Select an employee.');
+  if (!lastWorkingDay) throw new Error('Last Working Day is required.');
+  const payroll = requirePayrollSpreadsheet_();
+  const attendance = requireAttendanceSpreadsheet_();
+  setupPayrollSpreadsheet_(payroll);
+  setupAttendanceSpreadsheet_(attendance);
+  return buildFinalPayrollPreview_(attendance, payroll, code, lastWorkingDay);
+}
+
+function offboardEmployee(payload) {
+  payload = payload || {};
+  const code = normalizeCode_(payload.employeeCode);
+  const eventType = String(payload.eventType || '').trim();
+  const lastWorkingDay = parseDateOrBlank_(payload.lastWorkingDay);
+  const reason = String(payload.reason || '').trim();
+  if (!code) throw new Error('Select an employee.');
+  if (['Resigned', 'Terminated'].indexOf(eventType) === -1) throw new Error('Select Resigned or Terminated.');
+  if (!lastWorkingDay) throw new Error('Last Working Day is required.');
+  if (!reason) throw new Error('Reason is required.');
+
+  const payroll = requirePayrollSpreadsheet_();
+  const attendance = requireAttendanceSpreadsheet_();
+  setupPayrollSpreadsheet_(payroll);
+  setupAttendanceSpreadsheet_(attendance);
+  const employee = getEmployeeRowByCode_(attendance, code);
+  if (!employee) throw new Error(`${code} is not an active employee.`);
+
+  const finalPlan = buildFinalPayrollPlan_(payroll, code, lastWorkingDay);
+  const finalPeriod = createOrUpdateFinalPayPeriod_(payroll, finalPlan);
+  setEmployeeEndDate_(attendance, code, lastWorkingDay);
+  closeEffectiveRowsThroughDate_(getSheet_(attendance, CONFIG.attendanceTabs.schedules), code, lastWorkingDay);
+  closeEffectiveRowsThroughDate_(getSheet_(payroll, CONFIG.payrollTabs.comp), code, lastWorkingDay);
+  upsertFinalKpiBonus_(attendance, payroll, code, finalPeriod, lastWorkingDay);
+
+  const payrollResult = calculatePayPeriod({
+    periodId: finalPeriod.periodId,
+    employeeCodes: [code]
+  });
+
+  setEmployeeStatus_(attendance, code, eventType, lastWorkingDay);
+  appendRows_(getSheet_(payroll, CONFIG.payrollTabs.lifecycle), [[
+    makeId_('LIFE'),
+    code,
+    eventType,
+    new Date(),
+    dateOnly_(lastWorkingDay),
+    reason,
+    getActiveUserEmail_(),
+    finalPeriod.periodId,
+    [String(payload.notes || '').trim(), payrollResult.warnings.join(' ')].filter(Boolean).join(' | ')
+  ]]);
+  refreshPtoBalances_(attendance);
+  applyAttendanceFormatting_(attendance);
+  applyPayrollFormatting_(payroll);
+  return {
+    message: `${code} marked ${eventType}. Final payroll ${finalPeriod.periodId} calculated.`
+  };
+}
+
+function getReactivateDialogData() {
+  const payroll = requirePayrollSpreadsheet_();
+  const attendance = requireAttendanceSpreadsheet_();
+  setupPayrollSpreadsheet_(payroll);
+  setupAttendanceSpreadsheet_(attendance);
+  return {
+    employees: listEmployeesForLifecycleUi_(['Inactive', 'Resigned', 'Terminated']),
+    today: formatDateKey_(new Date())
+  };
+}
+
+function getReactivateEmployeeData(employeeCode) {
+  const attendance = requireAttendanceSpreadsheet_();
+  setupAttendanceSpreadsheet_(attendance);
+  const code = normalizeCode_(employeeCode);
+  const employee = getEmployeeRowByCodeAnyStatus_(attendance, code);
+  if (!employee) throw new Error(`${code} was not found.`);
+  return {
+    employeeCode: code,
+    position: employee.Position || '',
+    manager: employee.Manager || '',
+    displayName: employee['Display Name'] || employee['Full Name'] || code
+  };
+}
+
+function reactivateEmployee(payload) {
+  payload = payload || {};
+  const code = normalizeCode_(payload.employeeCode);
+  const startDate = parseDateOrBlank_(payload.startDate);
+  const reason = String(payload.reason || '').trim();
+  if (!code) throw new Error('Select an employee.');
+  if (!startDate) throw new Error('New Start Date is required.');
+  if (!reason) throw new Error('Reason is required.');
+
+  const payroll = requirePayrollSpreadsheet_();
+  const attendance = requireAttendanceSpreadsheet_();
+  setupPayrollSpreadsheet_(payroll);
+  setupAttendanceSpreadsheet_(attendance);
+  const employee = getEmployeeRowByCodeAnyStatus_(attendance, code);
+  if (!employee) throw new Error(`${code} was not found.`);
+  if (employee.Status === 'Active' || employee.Status === '') throw new Error(`${code} is already active.`);
+
+  updateEmployeeForReactivation_(attendance, code, startDate, payload);
+  appendRows_(getSheet_(attendance, CONFIG.attendanceTabs.schedules), [
+    buildScheduleRowFromPayload_(code, dateOnly_(startDate), payload.schedule || {})
+  ]);
+  const comp = payload.comp || {};
+  appendRows_(getSheet_(payroll, CONFIG.payrollTabs.comp), [[
+    code,
+    dateOnly_(startDate),
+    '',
+    comp.rampTier || '',
+    toNumberOrBlank_(comp.monthlyBaseSalary),
+    toNumberOrBlank_(comp.monthlyBenefits),
+    toNumberOrBlank_(comp.monthlyAttendanceBonus),
+    toNumberOrBlank_(comp.monthlyKpiBonusMax),
+    toNumberOrBlank_(comp.quarterlyPaBonus),
+    toNumberOrBlank_(comp.annualPtoDays),
+    toNumberOrBlank_(comp.annualNonPtoDays),
+    comp.notes || 'Reactivation compensation terms.'
+  ]]);
+  appendRows_(getSheet_(payroll, CONFIG.payrollTabs.lifecycle), [[
+    makeId_('LIFE'),
+    code,
+    'Reactivated',
+    new Date(),
+    dateOnly_(startDate),
+    reason,
+    getActiveUserEmail_(),
+    '',
+    String(payload.notes || '').trim()
+  ]]);
+  refreshPtoBalances_(attendance);
+  applyAttendanceFormatting_(attendance);
+  applyPayrollFormatting_(payroll);
+  return {
+    message: `${code} reactivated with new schedule and compensation rows effective ${formatDateKey_(startDate)}.`
+  };
+}
+
 function getEmployeeScorecard(payload) {
   payload = payload || {};
   const employeeCode = normalizeCode_(payload.employeeCode);
@@ -1393,6 +1719,7 @@ function setupPayrollSpreadsheet_(ss) {
   ensureSheet_(ss, CONFIG.payrollTabs.calculations, HEADERS.calculations);
   ensureSheet_(ss, CONFIG.payrollTabs.output, HEADERS.output);
   ensureSheet_(ss, CONFIG.payrollTabs.lifecycle, HEADERS.lifecycle);
+  ensureSheet_(ss, CONFIG.payrollTabs.compChanges, HEADERS.compChanges);
   ensureSheet_(ss, CONFIG.payrollTabs.paTracker, HEADERS.paTracker);
   ensureSheet_(ss, CONFIG.payrollTabs.bonuses, HEADERS.bonuses);
   seedPayPeriods_(ss, new Date().getFullYear());
@@ -2515,15 +2842,15 @@ function getAttendanceWorkflowGuide_() {
 
 function getPayrollWorkflowGuide_() {
   return {
-    eyebrow: 'PHASE 1-4 OPERATING GUIDE',
+    eyebrow: 'PHASE 1-5 OPERATING GUIDE',
     title: 'Payroll Workflow Instructions',
-    subtitle: 'Use this workbook to maintain private compensation data, calculate the pay period, and produce payroll output from approved attendance, leave, and makeup-hour inputs.',
+    subtitle: 'Use this workbook to maintain private compensation data, calculate payroll, and manage approved compensation and lifecycle changes without overwriting history.',
     workbook: CONFIG.payrollSpreadsheetName,
     owner: 'Payroll processor',
     entryPoint: 'Payroll menu',
     beforeUse: 'Confirm attendance has been rebuilt and compensation is complete.',
     cadence: 'Mid-month and end-of-month payroll',
-    scope: 'Base pay, deductions, benefits, bonuses, adjustments',
+    scope: 'Base pay, deductions, benefits, bonuses, adjustments, compensation changes, lifecycle',
     sections: [
       {
         eyebrow: 'SECTION 01',
@@ -2538,7 +2865,9 @@ function getPayrollWorkflowGuide_() {
           ['5', 'Payroll processor', 'Calculate the pay period.', 'Payroll menu', 'Each run', 'Payroll Calculations and Payroll Output are refreshed.'],
           ['6', 'Payroll approver', 'Review warnings, benefits, bonus statuses, deductions, and Needs review rows.', 'Payroll Calculations', 'Before payment', 'Exceptions have notes or correction actions.'],
           ['7', 'Payroll processor', 'Refresh quarterly PA tracking after quarter-end payrolls.', 'Payroll menu', 'Quarter close', 'Quarterly PA Tracker shows eligible employees and reasons.'],
-          ['8', 'Payroll processor', 'Finalize after approval.', 'Payroll menu', 'After approval', 'Pay Period status is Paid and output is ready for export.']
+          ['8', 'Payroll processor', 'Use Compensation Change for raises or changed allowances.', 'Payroll menu', 'When approved', 'A new effective-dated comp row is created and the old row is closed.'],
+          ['9', 'Payroll processor', 'Use Offboard Employee or Reactivate Employee for lifecycle changes.', 'Payroll menu', 'As needed', 'Lifecycle log is appended and historical rows are retained.'],
+          ['10', 'Payroll processor', 'Finalize after approval.', 'Payroll menu', 'After approval', 'Pay Period status is Paid and output is ready for export.']
         ]
       },
       {
@@ -2552,6 +2881,7 @@ function getPayrollWorkflowGuide_() {
           ['Payroll Calculations', 'Detailed calculated pay and deductions.', 'Payroll approver', 'Review only', 'Worked Hours, Deductions, Calculated Total', 'Investigate Needs review before payment.'],
           ['Payroll Output', 'Compact export-facing payroll summary.', 'Payroll processor', 'Review then export', 'Base, Deductions, TOTAL, Status', 'Export only after exceptions are cleared or approved.'],
           ['Employee Lifecycle Log', 'Hire, termination, and reactivation audit.', 'Payroll and operations', 'Yes', 'Event Type, Event Date, Effective Date', 'Capture lifecycle decisions that affect payroll timing.'],
+          ['Compensation Change Log', 'Append-only record of compensation changes.', 'Payroll processor', 'Script-updated', 'Field, old value, new value, approver', 'Use Compensation Change so effective dates and retro adjustments are logged.'],
           ['Quarterly PA Tracker', 'Three-month perfect-attendance tracking.', 'Payroll processor', 'Script-updated', 'Quarter, month status, eligibility, bonus', 'Refresh after quarter-end attendance is complete.'],
           ['Bonuses & Adjustments', 'Approved KPI, bonuses, and adjustments.', 'Payroll processor', 'Append via dialogs', 'Type, description, amount, approver', 'Use menu dialogs so approval metadata is captured.']
         ]
@@ -2577,6 +2907,18 @@ function getPayrollWorkflowGuide_() {
       },
       {
         eyebrow: 'SECTION 04',
+        title: 'Compensation And Lifecycle Controls',
+        description: 'Phase 5 actions preserve history by appending logs and new effective-dated rows.',
+        headers: ['Action', 'Where', 'Primary Effect', 'Audit Trail', 'Payroll Effect', 'Owner'],
+        rows: [
+          ['Compensation Change', 'Payroll menu', 'Closes current Compensation Master row and appends a new one.', 'Compensation Change Log', 'Optional retroactive adjustment added to Bonuses & Adjustments.', 'Payroll processor'],
+          ['Offboard Employee', 'Payroll menu', 'Sets employee end date, closes schedule and comp rows, then marks status Resigned or Terminated.', 'Employee Lifecycle Log', 'Creates and calculates a FINAL pay period for the employee.', 'Payroll processor'],
+          ['Reactivate Employee', 'Payroll menu', 'Sets employee Active and appends fresh schedule and compensation rows.', 'Employee Lifecycle Log', 'New terms apply from the new start date.', 'Payroll processor'],
+          ['View logs', 'Payroll menu', 'Jumps to the audit log tabs.', 'No edit required', 'Use logs during approval review.', 'Payroll approver']
+        ]
+      },
+      {
+        eyebrow: 'SECTION 05',
         title: 'Confidential Handoff',
         description: 'Keep compensation work private while making the approval state easy to audit.',
         headers: ['Moment', 'Owner', 'Action', 'Artifact', 'Access', 'Notes'],
@@ -2588,7 +2930,7 @@ function getPayrollWorkflowGuide_() {
         ]
       },
       {
-        eyebrow: 'SECTION 05',
+        eyebrow: 'SECTION 06',
         title: 'Phase 1 Test Scenario',
         description: 'Run injectPhase1TestData() to create a private test pay period without using a production period ID.',
         headers: ['Period ID', 'Employee Set', 'Expected Warning', 'Review Tab', 'Status', 'Notes'],
@@ -2723,13 +3065,22 @@ function calculateEmployeePay_(employeeCode, period, context) {
   const shortHoursDeduction = shortHours * hourlyBaseRate;
   const totalDeductions = lateDeduction + absenceDeduction + shortHoursDeduction;
   const benefits = calculateBenefitsForPeriod_(code, employee, period, context, comp);
-  const attendanceBonus = calculateMonthlyAttendanceBonus_(code, period, context, comp);
+  const finalPayroll = isFinalPayroll_(period);
+  let attendanceBonus = calculateMonthlyAttendanceBonus_(code, period, context, comp);
+  if (finalPayroll) {
+    attendanceBonus = {
+      amount: 0,
+      status: 'Forfeited',
+      notes: 'Final payroll rule: attendance bonus is forfeited.',
+      summary: null
+    };
+  }
   const quarterlyPaBonus = calculateQuarterlyPaBonus_(code, period, context, comp);
   const bonusAdjustments = summarizeBonusAdjustments_(context.bonusRows, normalizePeriodId_(period['Period ID']), code);
   const isMidPayroll = isMidPayroll_(period);
   const attendanceBonusAmount = toNumberOrZero_(attendanceBonus.amount);
   const quarterlyPaAmount = toNumberOrZero_(quarterlyPaBonus.amount);
-  const kpiBonusAmount = isMidPayroll ? bonusAdjustments.kpi : 0;
+  const kpiBonusAmount = (isMidPayroll || finalPayroll) ? bonusAdjustments.kpi : 0;
   const additionalBonusAmount = bonusAdjustments.additional;
   const positiveAdjustmentAmount = bonusAdjustments.positive;
   const negativeAdjustmentAmount = bonusAdjustments.negative;
@@ -2746,9 +3097,10 @@ function calculateEmployeePay_(employeeCode, period, context) {
   if (remainingMakeupHours) notes.push(`${round2_(remainingMakeupHours)} approved makeup hour(s) unused in this pay period.`);
   if (!scheduledDays) notes.push('No scheduled days in this pay period.');
   if (benefits.notes) notes.push(`Benefits: ${benefits.notes}`);
+  if (finalPayroll) notes.push('Final payroll: attendance bonus forfeited; benefits are prorated through the final working day.');
   if (attendanceBonus.status !== 'Not due') notes.push(`Attendance bonus ${attendanceBonus.status}: ${attendanceBonus.notes}`);
   if (quarterlyPaBonus.status !== 'Not due') notes.push(`Quarterly PA ${quarterlyPaBonus.status}: ${quarterlyPaBonus.notes}`);
-  if (bonusAdjustments.kpi && !isMidPayroll) notes.push('KPI bonus entries exist but are not paid on EOM payrolls.');
+  if (bonusAdjustments.kpi && !isMidPayroll && !finalPayroll) notes.push('KPI bonus entries exist but are not paid on EOM payrolls.');
   if (bonusAdjustments.notes.length) notes.push(`Bonuses/adjustments: ${bonusAdjustments.notes.join(' | ')}`);
 
   const calculationRow = [
@@ -2915,12 +3267,15 @@ function applyPayrollFormatting_(ss) {
   setupSheetFormatting_(getSheet_(ss, CONFIG.payrollTabs.calculations), HEADERS.calculations.length);
   setupSheetFormatting_(getSheet_(ss, CONFIG.payrollTabs.output), HEADERS.output.length);
   setupSheetFormatting_(getSheet_(ss, CONFIG.payrollTabs.lifecycle), HEADERS.lifecycle.length);
+  setupSheetFormatting_(getSheet_(ss, CONFIG.payrollTabs.compChanges), HEADERS.compChanges.length);
   setupSheetFormatting_(getSheet_(ss, CONFIG.payrollTabs.paTracker), HEADERS.paTracker.length);
   setupSheetFormatting_(getSheet_(ss, CONFIG.payrollTabs.bonuses), HEADERS.bonuses.length);
 
   setValidation_(getSheet_(ss, CONFIG.payrollTabs.periods), 5, ['Mid', 'EOM']);
   setValidation_(getSheet_(ss, CONFIG.payrollTabs.periods), 6, ['Open', 'Calculated', 'Paid']);
   setValidation_(getSheet_(ss, CONFIG.payrollTabs.bonuses), 3, ['KPI', 'Additional', 'Positive Adj', 'Negative Adj']);
+  setValidation_(getSheet_(ss, CONFIG.payrollTabs.lifecycle), 3, ['Hired', 'Resigned', 'Terminated', 'Reactivated']);
+  setValidation_(getSheet_(ss, CONFIG.payrollTabs.compChanges), 10, ['Yes', 'No']);
   getSheet_(ss, CONFIG.payrollTabs.comp).getRange('B:C').setNumberFormat('yyyy-mm-dd');
   getSheet_(ss, CONFIG.payrollTabs.comp).getRange('E:I').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.periods).getRange('B:D').setNumberFormat('yyyy-mm-dd');
@@ -2934,6 +3289,8 @@ function applyPayrollFormatting_(ss) {
   getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('AD:AH').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.output).getRange('C:J').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.lifecycle).getRange('D:E').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
+  getSheet_(ss, CONFIG.payrollTabs.compChanges).getRange('C:D').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
+  getSheet_(ss, CONFIG.payrollTabs.compChanges).getRange('K:K').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.paTracker).getRange('L:L').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.paTracker).getRange('N:N').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
   getSheet_(ss, CONFIG.payrollTabs.bonuses).getRange('E:E').setNumberFormat('$#,##0.00');
@@ -3528,6 +3885,297 @@ function countInclusiveDays_(startDate, endDate) {
   return Math.round((end - start) / 86400000) + 1;
 }
 
+function getCompFieldConfig_() {
+  return [
+    { key: 'rampTier', header: 'Ramp Tier', label: 'Ramp Tier', type: 'text' },
+    { key: 'monthlyBaseSalary', header: 'Monthly Base Salary', label: 'Monthly Base Salary', type: 'number' },
+    { key: 'monthlyBenefits', header: 'Monthly Benefits', label: 'Monthly Benefits', type: 'number' },
+    { key: 'monthlyAttendanceBonus', header: 'Monthly Attendance Bonus', label: 'Monthly Attendance Bonus', type: 'number' },
+    { key: 'monthlyKpiBonusMax', header: 'Monthly KPI Bonus (Max)', label: 'Monthly KPI Bonus Max', type: 'number' },
+    { key: 'quarterlyPaBonus', header: 'Quarterly PA Bonus', label: 'Quarterly PA Bonus', type: 'number' },
+    { key: 'annualPtoDays', header: 'Annual PTO Days', label: 'Annual PTO Days', type: 'number' },
+    { key: 'annualNonPtoDays', header: 'Annual Non-PTO Days', label: 'Annual Non-PTO Days', type: 'number' }
+  ];
+}
+
+function normalizeCompComparable_(value) {
+  if (value === '' || value === null || value === undefined) return '';
+  const number = toNumberOrBlank_(value);
+  return number === '' ? String(value).trim() : String(round2_(number));
+}
+
+function getCurrentCompRow_(payroll, employeeCode, date) {
+  const rows = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp));
+  return getCompForDate_(rows, employeeCode, date);
+}
+
+function createRetroactiveCompAdjustment_(attendance, payroll, employeeCode, oldComp, nextValues, payload) {
+  const retroStart = parseDateOrBlank_(payload.retroStart);
+  const retroEnd = parseDateOrBlank_(payload.retroEnd);
+  const periodId = normalizePeriodId_(payload.adjustmentPeriodId);
+  if (!retroStart || !retroEnd) throw new Error('Retroactive Start and End are required.');
+  if (dateOnly_(retroStart).getTime() > dateOnly_(retroEnd).getTime()) {
+    throw new Error('Retroactive End must be on or after Retroactive Start.');
+  }
+  if (!periodId) throw new Error('Select the payroll period that should receive the retroactive adjustment.');
+  getPayPeriodById_(payroll, periodId);
+
+  const oldBase = toNumberOrBlank_(oldComp['Monthly Base Salary']);
+  const newBase = toNumberOrBlank_(nextValues['Monthly Base Salary']);
+  if (oldBase === '' || newBase === '' || oldBase === newBase) {
+    return { amount: '', periodId: '' };
+  }
+
+  const amount = calculateRetroactiveBaseAdjustment_(attendance, employeeCode, oldBase, newBase, retroStart, retroEnd);
+  if (!amount) return { amount: 0, periodId: '' };
+  appendRows_(getSheet_(payroll, CONFIG.payrollTabs.bonuses), [[
+    periodId,
+    normalizeCode_(employeeCode),
+    amount >= 0 ? 'Positive Adj' : 'Negative Adj',
+    `Retroactive base salary change for ${displayDate_(retroStart)} to ${displayDate_(retroEnd)}.`,
+    round2_(Math.abs(amount)),
+    getActiveUserEmail_(),
+    new Date()
+  ]]);
+  return { amount: round2_(amount), periodId };
+}
+
+function calculateRetroactiveBaseAdjustment_(attendance, employeeCode, oldMonthlyBase, newMonthlyBase, startDate, endDate) {
+  const schedules = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules));
+  const start = dateOnly_(startDate);
+  const end = dateOnly_(endDate);
+  let amount = 0;
+
+  for (let month = new Date(start.getFullYear(), start.getMonth(), 1); month.getTime() <= end.getTime(); month = addMonths_(month, 1)) {
+    const monthStart = new Date(month.getFullYear(), month.getMonth(), 1);
+    const monthEnd = new Date(month.getFullYear(), month.getMonth() + 1, 0);
+    const segmentStart = maxDate_(start, monthStart);
+    const segmentEnd = minDate_(end, monthEnd);
+    const scheduledInMonth = countScheduledDaysInMonth_(schedules, employeeCode, monthStart);
+    const scheduledInSegment = countScheduledDaysInRange_(schedules, employeeCode, segmentStart, segmentEnd);
+    if (!scheduledInMonth || !scheduledInSegment) continue;
+    amount += ((newMonthlyBase - oldMonthlyBase) / scheduledInMonth) * scheduledInSegment;
+  }
+  return round2_(amount);
+}
+
+function countScheduledDaysInRange_(schedules, employeeCode, startDate, endDate) {
+  let count = 0;
+  for (let cursor = dateOnly_(startDate); cursor.getTime() <= dateOnly_(endDate).getTime(); cursor = addDays_(cursor, 1)) {
+    const schedule = getScheduleForDate_(schedules, employeeCode, cursor);
+    const daySchedule = getDaySchedule_(schedule, cursor);
+    if (daySchedule.isScheduled) count += 1;
+  }
+  return count;
+}
+
+function listEmployeesForLifecycleUi_(statuses) {
+  const attendance = requireAttendanceSpreadsheet_();
+  const statusSet = new Set(statuses || []);
+  return readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees))
+    .filter(row => statusSet.has(row.Status || ''))
+    .map(row => ({
+      employeeCode: normalizeCode_(row['Employee Code']),
+      displayName: row['Display Name'] || row['Full Name'] || row['Employee Code'],
+      fullName: row['Full Name'] || '',
+      status: row.Status || '',
+      position: row.Position || '',
+      manager: row.Manager || '',
+      startDate: displayDate_(row['Start Date']),
+      endDate: displayDate_(row['End Date'])
+    }));
+}
+
+function getEmployeeRowByCodeAnyStatus_(attendance, employeeCode) {
+  const code = normalizeCode_(employeeCode);
+  if (!code) return null;
+  const rows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees))
+    .filter(row => normalizeCode_(row['Employee Code']) === code);
+  return rows.length ? rows[rows.length - 1] : null;
+}
+
+function getFirstDayOfNextMonth_() {
+  const today = new Date();
+  return new Date(today.getFullYear(), today.getMonth() + 1, 1);
+}
+
+function buildFinalPayrollPlan_(payroll, employeeCode, lastWorkingDay) {
+  const code = normalizeCode_(employeeCode);
+  const lastDay = dateOnly_(lastWorkingDay);
+  const periods = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.periods));
+  const matching = periods.filter(period => {
+    const start = parseDateOrBlank_(period['Period Start']);
+    const end = parseDateOrBlank_(period['Period End']);
+    return start && end && dateOnly_(start).getTime() <= lastDay.getTime() && dateOnly_(end).getTime() >= lastDay.getTime();
+  })[0];
+  return {
+    periodId: `FINAL-${code}-${formatCompactDate_(lastDay)}`,
+    payDate: lastDay,
+    periodStart: matching ? dateOnly_(parseDateOrBlank_(matching['Period Start'])) : new Date(lastDay.getFullYear(), lastDay.getMonth(), 1),
+    periodEnd: lastDay,
+    type: matching ? matching['Period Type (Mid / EOM)'] : (lastDay.getDate() <= 15 ? 'EOM' : 'Mid'),
+    sourcePeriodId: matching ? normalizePeriodId_(matching['Period ID']) : ''
+  };
+}
+
+function createOrUpdateFinalPayPeriod_(payroll, plan) {
+  const sheet = getSheet_(payroll, CONFIG.payrollTabs.periods);
+  sheet.getRange('A:A').setNumberFormat('@');
+  const row = [
+    plan.periodId,
+    plan.payDate,
+    plan.periodStart,
+    plan.periodEnd,
+    plan.type,
+    'Open'
+  ];
+  const existing = readObjects_(sheet).filter(period => normalizePeriodId_(period['Period ID']) === plan.periodId)[0];
+  if (existing) {
+    sheet.getRange(existing._rowNumber, 1, 1, row.length).setValues([row]);
+  } else {
+    appendRows_(sheet, [row]);
+  }
+  return plan;
+}
+
+function buildFinalPayrollPreview_(attendance, payroll, employeeCode, lastWorkingDay) {
+  const code = normalizeCode_(employeeCode);
+  const employee = getEmployeeRowByCodeAnyStatus_(attendance, code);
+  if (!employee) throw new Error(`${code} was not found.`);
+  const lastDay = dateOnly_(lastWorkingDay);
+  const plan = buildFinalPayrollPlan_(payroll, code, lastDay);
+  const comp = getCurrentCompRow_(payroll, code, lastDay);
+  const schedules = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules));
+  const monthStart = new Date(lastDay.getFullYear(), lastDay.getMonth(), 1);
+  const scheduledInMonth = countScheduledDaysInMonth_(schedules, code, monthStart);
+  const eligibleDays = countScheduledDaysInRange_(schedules, code, monthStart, lastDay);
+  const monthlyBenefit = comp ? toNumberOrBlank_(comp['Monthly Benefits']) : '';
+  const benefitPreview = monthlyBenefit === '' || !scheduledInMonth
+    ? ''
+    : round2_(monthlyBenefit * (eligibleDays / scheduledInMonth));
+  const kpi = getFinalKpiPreview_(attendance, payroll, code, lastDay, plan);
+  const ptoBalance = getPtoBalanceSummaryForEmployee_(code, lastDay.getFullYear());
+  return {
+    employeeCode: code,
+    employee: employee['Display Name'] || employee['Full Name'] || code,
+    finalPeriodId: plan.periodId,
+    periodStart: displayDate_(plan.periodStart),
+    periodEnd: displayDate_(plan.periodEnd),
+    sourcePeriodId: plan.sourcePeriodId,
+    monthlyBenefit,
+    benefitPreview,
+    scheduledInMonth,
+    eligibleDays,
+    attendanceBonus: 'Forfeited',
+    kpi,
+    ptoPayout: '',
+    ptoPayoutNote: 'PTO payout policy is not configured; leave blank unless you confirm a manual payout adjustment.'
+  };
+}
+
+function getFinalKpiPreview_(attendance, payroll, employeeCode, lastWorkingDay, plan) {
+  const code = normalizeCode_(employeeCode);
+  const bonusRows = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.bonuses))
+    .filter(row => normalizeCode_(row['Employee Code']) === code && row['Type (KPI / Additional / Positive Adj / Negative Adj)'] === 'KPI' && toNumberOrZero_(row.Amount) > 0);
+  const source = bonusRows.filter(row => normalizePeriodId_(row['Pay Period ID']) === plan.sourcePeriodId)[0] || null;
+  if (!source) {
+    return {
+      approvedAmount: '',
+      proratedAmount: '',
+      sourcePeriodId: '',
+      note: 'No approved KPI entry was found for the source pay period.'
+    };
+  }
+  const schedules = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules));
+  const lastDay = dateOnly_(lastWorkingDay);
+  const monthStart = new Date(lastDay.getFullYear(), lastDay.getMonth(), 1);
+  const scheduledInMonth = countScheduledDaysInMonth_(schedules, code, monthStart);
+  const eligibleDays = countScheduledDaysInRange_(schedules, code, monthStart, lastDay);
+  const approvedAmount = toNumberOrZero_(source.Amount);
+  const proratedAmount = scheduledInMonth ? round2_(approvedAmount * (eligibleDays / scheduledInMonth)) : 0;
+  return {
+    approvedAmount,
+    proratedAmount,
+    sourcePeriodId: normalizePeriodId_(source['Pay Period ID']),
+    eligibleDays,
+    scheduledInMonth,
+    note: `${eligibleDays} of ${scheduledInMonth} scheduled day(s) eligible.`
+  };
+}
+
+function upsertFinalKpiBonus_(attendance, payroll, employeeCode, finalPeriod, lastWorkingDay) {
+  const preview = getFinalKpiPreview_(attendance, payroll, employeeCode, lastWorkingDay, finalPeriod);
+  if (!preview.proratedAmount) return;
+  const sheet = getSheet_(payroll, CONFIG.payrollTabs.bonuses);
+  replaceBonusAdjustmentRows_(sheet, finalPeriod.periodId, ['KPI'], [employeeCode], [[
+    finalPeriod.periodId,
+    normalizeCode_(employeeCode),
+    'KPI',
+    `Final payroll KPI proration from ${preview.sourcePeriodId}. ${preview.note}`,
+    round2_(preview.proratedAmount),
+    getActiveUserEmail_(),
+    new Date()
+  ]]);
+}
+
+function setEmployeeEndDate_(attendance, employeeCode, endDate) {
+  const sheet = getSheet_(attendance, CONFIG.attendanceTabs.employees);
+  const row = getEmployeeRowByCode_(attendance, employeeCode);
+  if (!row) throw new Error(`${employeeCode} is not active.`);
+  sheet.getRange(row._rowNumber, 6).setValue(dateOnly_(endDate));
+}
+
+function setEmployeeStatus_(attendance, employeeCode, status, endDate) {
+  const sheet = getSheet_(attendance, CONFIG.attendanceTabs.employees);
+  const row = getEmployeeRowByCodeAnyStatus_(attendance, employeeCode);
+  if (!row) throw new Error(`${employeeCode} was not found.`);
+  sheet.getRange(row._rowNumber, 4).setValue(status);
+  sheet.getRange(row._rowNumber, 6).setValue(dateOnly_(endDate));
+}
+
+function updateEmployeeForReactivation_(attendance, employeeCode, startDate, payload) {
+  const sheet = getSheet_(attendance, CONFIG.attendanceTabs.employees);
+  const row = getEmployeeRowByCodeAnyStatus_(attendance, employeeCode);
+  if (!row) throw new Error(`${employeeCode} was not found.`);
+  sheet.getRange(row._rowNumber, 4, 1, 5).setValues([[
+    'Active',
+    dateOnly_(startDate),
+    '',
+    payload.position || row.Position || '',
+    payload.manager || row.Manager || ''
+  ]]);
+  if (payload.notes) {
+    sheet.getRange(row._rowNumber, 11).setValue([String(row.Notes || '').trim(), String(payload.notes || '').trim()].filter(Boolean).join(' | '));
+  }
+}
+
+function closeEffectiveRowsThroughDate_(sheet, employeeCode, effectiveToDate) {
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return 0;
+  const headers = values[0];
+  const codeIdx = headers.indexOf('Employee Code');
+  const fromIdx = headers.indexOf('Effective From');
+  const toIdx = headers.indexOf('Effective To');
+  if (codeIdx === -1 || fromIdx === -1 || toIdx === -1) return 0;
+  const code = normalizeCode_(employeeCode);
+  const closeDate = dateOnly_(effectiveToDate);
+  let updated = 0;
+  for (let row = 1; row < values.length; row += 1) {
+    if (normalizeCode_(values[row][codeIdx]) !== code) continue;
+    const from = parseDateOrBlank_(values[row][fromIdx]);
+    const to = parseDateOrBlank_(values[row][toIdx]);
+    if (from && dateOnly_(from).getTime() > closeDate.getTime()) continue;
+    if (to && dateOnly_(to).getTime() <= closeDate.getTime()) continue;
+    sheet.getRange(row + 1, toIdx + 1).setValue(closeDate);
+    updated += 1;
+  }
+  return updated;
+}
+
+function isFinalPayroll_(period) {
+  return normalizePeriodId_(period['Period ID']).indexOf('FINAL-') === 0;
+}
+
 function getDefaultAttendanceLogStartDate_(ss) {
   const eventRows = readObjects_(getSheet_(ss, CONFIG.attendanceTabs.events));
   const eventDates = eventRows.map(row => parseDateOrBlank_(row.Timestamp)).filter(Boolean);
@@ -3839,6 +4487,12 @@ function formatDateKey_(value) {
   const date = parseDateOrBlank_(value);
   if (!date) return '';
   return Utilities.formatDate(date, CONFIG.timezone, 'yyyy-MM-dd');
+}
+
+function formatCompactDate_(value) {
+  const date = parseDateOrBlank_(value);
+  if (!date) return '';
+  return Utilities.formatDate(date, CONFIG.timezone, 'yyyyMMdd');
 }
 
 function normalizePeriodId_(value) {
