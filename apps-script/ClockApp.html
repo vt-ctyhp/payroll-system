@@ -167,9 +167,11 @@
         letter-spacing: 0.14em;
         text-transform: uppercase;
       }
-      input {
+      input,
+      select,
+      textarea {
         width: 100%;
-        height: 44px;
+        min-height: 44px;
         border: 0;
         border-bottom: 1px solid var(--rule);
         background: transparent;
@@ -179,10 +181,56 @@
         color: var(--ink-primary);
         transition: border-color 120ms ease;
       }
-      input:focus {
+      select {
+        appearance: none;
+        -webkit-appearance: none;
+      }
+      textarea {
+        min-height: 96px;
+        padding-top: 8px;
+        resize: vertical;
+      }
+      input:focus,
+      select:focus,
+      textarea:focus {
         outline: none;
         border-bottom: 2px solid var(--ink-primary);
         padding-bottom: 0;
+      }
+      .utility-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 18px;
+      }
+      .utility-grid .secondary,
+      .form-actions .secondary {
+        margin-top: 0;
+      }
+      .balance-line {
+        margin: 16px 0 0;
+        padding-top: 14px;
+        border-top: 1px solid var(--rule);
+        color: var(--ink-muted);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+      }
+      .form-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 24px;
+      }
+      .request-note {
+        margin: 14px 0 0;
+        color: var(--ink-muted);
+        font-size: 13px;
+      }
+      @media (max-width: 420px) {
+        .utility-grid,
+        .form-actions {
+          grid-template-columns: 1fr;
+        }
       }
 
       /* Status / loading */
@@ -223,6 +271,7 @@
     <script>
       const STORAGE_KEY = 'payrollClockIdentity';
       let latestState = null;
+      let activeView = 'clock';
 
       function getIdentity() {
         try {
@@ -241,6 +290,7 @@
       }
 
       function loadState() {
+        if (activeView !== 'clock') return;
         setStatus('Loading clock state...');
         google.script.run
           .withSuccessHandler(render)
@@ -249,6 +299,7 @@
       }
 
       function render(state) {
+        activeView = 'clock';
         latestState = state;
         if (!state.authenticated) {
           renderIdentityForm(state);
@@ -259,6 +310,7 @@
           `<button type="button" ${button.enabled ? '' : 'disabled'} onclick="submitEvent('${button.type}')">${escapeHtml(button.label)}</button>`
         )).join('');
         const summary = state.todaySummary.map(item => `<li>${escapeHtml(item)}</li>`).join('');
+        const balance = renderBalanceLine(state.ptoBalance);
 
         document.getElementById('app').innerHTML = `
           <p class="eyebrow">Time &amp; Attendance</p>
@@ -268,6 +320,11 @@
           <hr class="rule">
           <div class="state">${escapeHtml(state.currentState)}</div>
           <div class="buttons">${buttons}</div>
+          <div class="utility-grid">
+            <button type="button" class="secondary" onclick="showTimeOffForm()">Request Time Off</button>
+            <button type="button" class="secondary" onclick="showMakeupForm()">Makeup Hours</button>
+          </div>
+          ${balance}
           <hr class="rule">
           <p class="summary-heading">Today so far</p>
           <ul class="summary">${summary}</ul>
@@ -277,6 +334,7 @@
       }
 
       function renderIdentityForm(state) {
+        activeView = 'clock';
         document.getElementById('app').innerHTML = `
           <p class="eyebrow">Time &amp; Attendance</p>
           <h1>Employee Clock-In</h1>
@@ -319,7 +377,116 @@
           });
       }
 
+      function showTimeOffForm() {
+        if (!latestState || !latestState.authenticated) return;
+        activeView = 'timeOff';
+        const today = getLocalDateInputValue();
+        const typeOptions = (latestState.timeOffTypes || ['PTO', 'UTO', 'Non-PTO'])
+          .map(type => `<option value="${escapeAttr(type)}">${escapeHtml(type)}</option>`)
+          .join('');
+        document.getElementById('app').innerHTML = `
+          <p class="eyebrow">Employee Request</p>
+          <h1>Time Off</h1>
+          <p class="request-note">Requests stay pending until a manager approves them.</p>
+          <label for="requestType">Type</label>
+          <select id="requestType">${typeOptions}</select>
+          <label for="startDate">Start Date</label>
+          <input id="startDate" type="date" value="${escapeAttr(today)}">
+          <label for="endDate">End Date</label>
+          <input id="endDate" type="date" value="${escapeAttr(today)}">
+          <label for="hoursDays">Hours / Days</label>
+          <input id="hoursDays" type="number" min="0.25" step="0.25" inputmode="decimal">
+          <label for="reason">Reason</label>
+          <textarea id="reason"></textarea>
+          <div class="form-actions">
+            <button type="button" class="secondary" onclick="backToClock()">Cancel</button>
+            <button id="submitRequestButton" type="button" onclick="submitTimeOffRequest()">Submit</button>
+          </div>
+          <p id="status" class="status"></p>
+        `;
+      }
+
+      function showMakeupForm() {
+        if (!latestState || !latestState.authenticated) return;
+        activeView = 'makeup';
+        const today = getLocalDateInputValue();
+        document.getElementById('app').innerHTML = `
+          <p class="eyebrow">Employee Request</p>
+          <h1>Makeup Hours</h1>
+          <p class="request-note">Approved makeup hours offset short-hour deductions in payroll.</p>
+          <label for="makeupDate">Date</label>
+          <input id="makeupDate" type="date" value="${escapeAttr(today)}">
+          <label for="makeupHours">Hours Requested</label>
+          <input id="makeupHours" type="number" min="0.25" step="0.25" inputmode="decimal">
+          <label for="makeupReason">Reason</label>
+          <textarea id="makeupReason"></textarea>
+          <div class="form-actions">
+            <button type="button" class="secondary" onclick="backToClock()">Cancel</button>
+            <button id="submitRequestButton" type="button" onclick="submitMakeupRequest()">Submit</button>
+          </div>
+          <p id="status" class="status"></p>
+        `;
+      }
+
+      function submitTimeOffRequest() {
+        const payload = {
+          identity: getIdentity(),
+          type: value('requestType'),
+          startDate: value('startDate'),
+          endDate: value('endDate'),
+          hoursDays: value('hoursDays'),
+          reason: value('reason')
+        };
+        if (!payload.startDate || !payload.endDate || !payload.hoursDays || !payload.reason) {
+          setStatus('Complete every field before submitting.', true);
+          return;
+        }
+        setRequestBusy(true);
+        setStatus('Submitting request...');
+        google.script.run
+          .withSuccessHandler(result => {
+            setStatus(result.message || 'Request submitted.');
+            setRequestBusy(false);
+          })
+          .withFailureHandler(error => {
+            showError(error);
+            setRequestBusy(false);
+          })
+          .submitWebTimeOffRequest(payload);
+      }
+
+      function submitMakeupRequest() {
+        const payload = {
+          identity: getIdentity(),
+          date: value('makeupDate'),
+          hoursRequested: value('makeupHours'),
+          reason: value('makeupReason')
+        };
+        if (!payload.date || !payload.hoursRequested || !payload.reason) {
+          setStatus('Complete every field before submitting.', true);
+          return;
+        }
+        setRequestBusy(true);
+        setStatus('Submitting request...');
+        google.script.run
+          .withSuccessHandler(result => {
+            setStatus(result.message || 'Request submitted.');
+            setRequestBusy(false);
+          })
+          .withFailureHandler(error => {
+            showError(error);
+            setRequestBusy(false);
+          })
+          .submitWebMakeupHourRequest(payload);
+      }
+
+      function backToClock() {
+        activeView = 'clock';
+        loadState();
+      }
+
       function signOut() {
+        activeView = 'clock';
         clearIdentity();
         latestState = null;
         loadState();
@@ -329,6 +496,34 @@
         document.querySelectorAll('button').forEach(button => {
           if (!button.classList.contains('secondary')) button.disabled = disabled;
         });
+      }
+
+      function setRequestBusy(disabled) {
+        const button = document.getElementById('submitRequestButton');
+        if (button) button.disabled = disabled;
+      }
+
+      function value(id) {
+        const node = document.getElementById(id);
+        return node ? node.value.trim() : '';
+      }
+
+      function renderBalanceLine(balance) {
+        if (!balance) return '';
+        const pto = formatBalance(balance.remainingPto);
+        const nonPto = formatBalance(balance.remainingNonPto);
+        return `<p class="balance-line">Current year balance: PTO ${escapeHtml(pto)} | Non-PTO ${escapeHtml(nonPto)}</p>`;
+      }
+
+      function formatBalance(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? number.toFixed(2) : 'blank';
+      }
+
+      function getLocalDateInputValue() {
+        const now = new Date();
+        now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+        return now.toISOString().slice(0, 10);
       }
 
       function setStatus(message, isError) {
@@ -349,6 +544,10 @@
           .replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;')
           .replace(/'/g, '&#039;');
+      }
+
+      function escapeAttr(value) {
+        return escapeHtml(value).replace(/`/g, '&#096;');
       }
 
       loadState();

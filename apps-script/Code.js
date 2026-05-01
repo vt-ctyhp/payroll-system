@@ -23,12 +23,17 @@ const CONFIG = {
     'Off (not scheduled)',
     'Incomplete (no clock-out)'
   ],
+  timeOffTypes: ['PTO', 'UTO', 'Non-PTO'],
+  requestStatuses: ['Pending', 'Approved', 'Denied'],
   attendanceTabs: {
     employees: 'Employees',
     schedules: 'Work Schedules',
     holidays: 'Holidays',
     events: 'Clock Events',
     log: 'Attendance Log',
+    timeOffRequests: 'Time Off Requests',
+    ptoBalances: 'PTO Balances',
+    makeupRequests: 'Makeup Hour Requests',
     scorecard: 'Scorecard'
   },
   payrollTabs: {
@@ -126,6 +131,39 @@ const HEADERS = {
     'Worked Hours',
     'Total Late Minutes',
     'Status'
+  ],
+  timeOffRequests: [
+    'Request ID',
+    'Employee Code',
+    'Type (PTO/UTO/Non-PTO)',
+    'Start Date',
+    'End Date',
+    'Hours/Days',
+    'Reason',
+    'Status (Pending/Approved/Denied)',
+    'Approved By',
+    'Approved At',
+    'Notes'
+  ],
+  ptoBalances: [
+    'Employee Code',
+    'Year',
+    'Annual PTO Allowance',
+    'Used PTO',
+    'Remaining PTO',
+    'Annual Non-PTO Allowance',
+    'Used Non-PTO',
+    'Remaining Non-PTO'
+  ],
+  makeupRequests: [
+    'Request ID',
+    'Employee Code',
+    'Date',
+    'Hours Requested',
+    'Reason',
+    'Status (Pending/Approved/Denied)',
+    'Approved By',
+    'Approved At'
   ],
   comp: [
     'Employee Code',
@@ -426,6 +464,11 @@ function addAttendanceMenu_() {
     .addItem('Edit Attendance Log Entry...', 'showEditAttendanceLogDialog')
     .addItem('Rebuild Attendance Log', 'rebuildAttendanceLogFromMenu')
     .addSeparator()
+    .addItem('Submit Time Off Request...', 'showTimeOffRequestDialog')
+    .addItem('Submit Makeup Hour Request...', 'showMakeupRequestDialog')
+    .addItem('Approve Time Off / Makeup Requests...', 'showPendingRequestsDialog')
+    .addItem('Refresh PTO Balances', 'refreshPtoBalancesFromMenu')
+    .addSeparator()
     .addItem('View Scorecard...', 'showScorecardDialog')
     .addSeparator()
     .addItem('Add New Employee...', 'showAddEmployeeDialog')
@@ -464,8 +507,8 @@ function showClockAppUrl() {
 
 function showAboutHelp() {
   SpreadsheetApp.getUi().alert(
-    'Payroll & Attendance Phase 1',
-    'Phase 1 includes self-service clock events, attendance log rebuilding, basic employee onboarding, and base payroll calculations with late/absence deductions. Compensation values left blank in the PRD remain blank in Compensation Master.',
+    'Payroll & Attendance',
+    'The current build includes self-service clock events, attendance log rebuilding, employee onboarding, payroll calculations, bonuses, adjustments, PTO/Non-PTO balance tracking, time off approvals, and makeup-hour approvals. Compensation values left blank in the PRD remain blank in Compensation Master.',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
@@ -504,6 +547,21 @@ function showAddClockEventDialog() {
 function showEditAttendanceLogDialog() {
   const html = HtmlService.createHtmlOutputFromFile('EditAttendanceLogDialog').setWidth(540).setHeight(500);
   SpreadsheetApp.getUi().showModalDialog(html, 'Edit Attendance Log Entry');
+}
+
+function showTimeOffRequestDialog() {
+  const html = HtmlService.createHtmlOutputFromFile('TimeOffRequestDialog').setWidth(620).setHeight(650);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Submit Time Off Request');
+}
+
+function showMakeupRequestDialog() {
+  const html = HtmlService.createHtmlOutputFromFile('MakeupRequestDialog').setWidth(560).setHeight(540);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Submit Makeup Hour Request');
+}
+
+function showPendingRequestsDialog() {
+  const html = HtmlService.createHtmlOutputFromFile('PendingRequestsDialog').setWidth(940).setHeight(720);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Approve Requests');
 }
 
 function showCalculatePayPeriodDialog() {
@@ -550,6 +608,11 @@ function refreshQuarterlyPaTrackerFromMenu() {
   SpreadsheetApp.getUi().alert('Quarterly PA Tracker refreshed', result.message, SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
+function refreshPtoBalancesFromMenu() {
+  const result = refreshPtoBalances();
+  SpreadsheetApp.getUi().alert('PTO Balances refreshed', result.message, SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
 function markSelectedPayPeriodPaidFromMenu() {
   const ui = SpreadsheetApp.getUi();
   const response = ui.prompt('Mark Pay Period Paid', 'Enter the Period ID to mark as Paid.', ui.ButtonSet.OK_CANCEL);
@@ -589,12 +652,13 @@ function getClockState(identity) {
   const lastEvent = events.length ? events[events.length - 1] : null;
   const allowed = getAllowedEvents_(lastEvent ? lastEvent['Event Type'] : '');
   const now = new Date();
+  const employeeCode = normalizeCode_(employee['Employee Code']);
 
   return {
     authenticated: true,
     employee: {
-      employeeCode: employee['Employee Code'],
-      displayName: employee['Display Name'] || employee['Full Name'] || employee['Employee Code']
+      employeeCode,
+      displayName: employee['Display Name'] || employee['Full Name'] || employeeCode
     },
     activeUserEmail: getActiveUserEmail_(),
     dateLabel: Utilities.formatDate(now, CONFIG.timezone, 'EEEE, MMMM d, yyyy'),
@@ -606,8 +670,10 @@ function getClockState(identity) {
     })),
     currentState: getCurrentStateLabel_(lastEvent ? lastEvent['Event Type'] : ''),
     todaySummary: buildTodaySummary_(events),
+    timeOffTypes: CONFIG.timeOffTypes,
+    ptoBalance: getPtoBalanceSummaryForEmployee_(employeeCode, now.getFullYear()),
     identity: {
-      employeeCode: employee['Employee Code'],
+      employeeCode,
       hasPinFallback: Boolean(employee['Web App PIN'])
     }
   };
@@ -783,6 +849,201 @@ function editAttendanceLogEntry(payload) {
     }
   }
   throw new Error('Attendance Log row was not found after rebuild.');
+}
+
+function getTimeOffRequestDialogData() {
+  const attendance = requireAttendanceSpreadsheet_();
+  setupAttendanceSpreadsheet_(attendance);
+  refreshPtoBalances_(attendance);
+  return {
+    employees: listEmployeesForUi_().filter(employee => employee.status === 'Active' || employee.status === ''),
+    types: CONFIG.timeOffTypes,
+    today: formatDateKey_(new Date()),
+    balances: getPtoBalanceSummariesByEmployee_(attendance, new Date().getFullYear())
+  };
+}
+
+function submitTimeOffRequest(payload) {
+  const result = createTimeOffRequest_(payload, 'SHEET_MENU');
+  return {
+    message: `${result.type} request ${result.requestId} submitted for ${result.employeeCode}. Manager approval is required before payroll uses it.`
+  };
+}
+
+function submitWebTimeOffRequest(payload) {
+  payload = payload || {};
+  const employee = resolveWebAppEmployee_(payload.identity);
+  if (!employee) throw new Error('Could not identify an active employee. Sign in again and retry.');
+  const result = createTimeOffRequest_(Object.assign({}, payload, {
+    employeeCode: employee['Employee Code']
+  }), 'WEB_APP');
+  return {
+    message: `${result.type} request submitted. Manager approval is required before payroll uses it.`
+  };
+}
+
+function getMakeupRequestDialogData() {
+  const attendance = requireAttendanceSpreadsheet_();
+  setupAttendanceSpreadsheet_(attendance);
+  return {
+    employees: listEmployeesForUi_().filter(employee => employee.status === 'Active' || employee.status === ''),
+    today: formatDateKey_(new Date())
+  };
+}
+
+function submitMakeupHourRequest(payload) {
+  const result = createMakeupHourRequest_(payload, 'SHEET_MENU');
+  return {
+    message: `Makeup request ${result.requestId} submitted for ${result.employeeCode}. Manager approval is required before payroll uses it.`
+  };
+}
+
+function submitWebMakeupHourRequest(payload) {
+  payload = payload || {};
+  const employee = resolveWebAppEmployee_(payload.identity);
+  if (!employee) throw new Error('Could not identify an active employee. Sign in again and retry.');
+  const result = createMakeupHourRequest_(Object.assign({}, payload, {
+    employeeCode: employee['Employee Code']
+  }), 'WEB_APP');
+  return {
+    message: `Makeup request submitted. Manager approval is required before payroll uses it.`
+  };
+}
+
+function getPendingRequestsDialogData() {
+  const attendance = requireAttendanceSpreadsheet_();
+  setupAttendanceSpreadsheet_(attendance);
+  refreshPtoBalances_(attendance);
+  const employees = getEmployeeDisplayMap_(attendance);
+  const balances = getPtoBalanceSummariesByEmployee_(attendance, new Date().getFullYear());
+
+  const timeOffRequests = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timeOffRequests))
+    .filter(row => row['Status (Pending/Approved/Denied)'] === 'Pending')
+    .map(row => {
+      const code = normalizeCode_(row['Employee Code']);
+      return {
+        kind: 'timeOff',
+        requestId: row['Request ID'],
+        employeeCode: code,
+        employee: employees[code] || code,
+        type: row['Type (PTO/UTO/Non-PTO)'],
+        startDate: displayDate_(row['Start Date']),
+        endDate: displayDate_(row['End Date']),
+        units: toNumberOrBlank_(row['Hours/Days']),
+        reason: row.Reason || '',
+        balance: balances[code] || null
+      };
+    });
+
+  const makeupRequests = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.makeupRequests))
+    .filter(row => row['Status (Pending/Approved/Denied)'] === 'Pending')
+    .map(row => {
+      const code = normalizeCode_(row['Employee Code']);
+      return {
+        kind: 'makeup',
+        requestId: row['Request ID'],
+        employeeCode: code,
+        employee: employees[code] || code,
+        date: displayDate_(row.Date),
+        hours: toNumberOrBlank_(row['Hours Requested']),
+        reason: row.Reason || ''
+      };
+    });
+
+  return {
+    timeOffRequests,
+    makeupRequests,
+    requestedAt: Utilities.formatDate(new Date(), CONFIG.timezone, 'yyyy-MM-dd h:mm a')
+  };
+}
+
+function processPendingRequests(payload) {
+  payload = payload || {};
+  const decisions = (payload.decisions || [])
+    .map(decision => ({
+      kind: String(decision.kind || ''),
+      requestId: String(decision.requestId || '').trim(),
+      decision: String(decision.decision || '').trim(),
+      notes: String(decision.notes || '').trim()
+    }))
+    .filter(decision => decision.requestId && decision.decision && decision.decision !== 'Keep');
+  if (!decisions.length) throw new Error('Choose at least one request to approve or deny.');
+
+  const attendance = requireAttendanceSpreadsheet_();
+  setupAttendanceSpreadsheet_(attendance);
+  const approvedBy = getActiveUserEmail_();
+  const approvedAt = new Date();
+  let timeOffUpdated = 0;
+  let makeupUpdated = 0;
+  const rebuildWindows = [];
+
+  const timeOffSheet = getSheet_(attendance, CONFIG.attendanceTabs.timeOffRequests);
+  const timeOffRows = readObjects_(timeOffSheet);
+  const makeupSheet = getSheet_(attendance, CONFIG.attendanceTabs.makeupRequests);
+  const makeupRows = readObjects_(makeupSheet);
+
+  decisions.forEach(decision => {
+    if (CONFIG.requestStatuses.indexOf(decision.decision) === -1 || decision.decision === 'Pending') {
+      throw new Error(`Invalid decision for ${decision.requestId}.`);
+    }
+
+    if (decision.kind === 'timeOff') {
+      const row = timeOffRows.filter(item => String(item['Request ID']) === decision.requestId)[0];
+      if (!row) throw new Error(`Time off request ${decision.requestId} was not found.`);
+      const notes = [String(row.Notes || '').trim(), decision.notes].filter(Boolean).join(' | ');
+      timeOffSheet.getRange(row._rowNumber, 8, 1, 4).setValues([[
+        decision.decision,
+        approvedBy,
+        approvedAt,
+        notes
+      ]]);
+      timeOffUpdated += 1;
+      const startDate = parseDateOrBlank_(row['Start Date']);
+      const endDate = parseDateOrBlank_(row['End Date']);
+      if (startDate && endDate) rebuildWindows.push({ start: startDate, end: endDate });
+      return;
+    }
+
+    if (decision.kind === 'makeup') {
+      const row = makeupRows.filter(item => String(item['Request ID']) === decision.requestId)[0];
+      if (!row) throw new Error(`Makeup request ${decision.requestId} was not found.`);
+      makeupSheet.getRange(row._rowNumber, 6, 1, 3).setValues([[
+        decision.decision,
+        approvedBy,
+        approvedAt
+      ]]);
+      makeupUpdated += 1;
+      return;
+    }
+
+    throw new Error(`Unknown request kind for ${decision.requestId}.`);
+  });
+
+  refreshPtoBalances_(attendance);
+  applyAttendanceFormatting_(attendance);
+  if (rebuildWindows.length) {
+    const start = new Date(Math.min.apply(null, rebuildWindows.map(window => dateOnly_(window.start).getTime())));
+    const end = new Date(Math.max.apply(null, rebuildWindows.map(window => dateOnly_(window.end).getTime())));
+    rebuildAttendanceLog({
+      startDate: formatDateKey_(start),
+      endDate: formatDateKey_(end)
+    });
+  }
+
+  return {
+    message: `${timeOffUpdated} time off request(s) and ${makeupUpdated} makeup request(s) updated. Recalculate payroll for affected periods.`
+  };
+}
+
+function refreshPtoBalances() {
+  const attendance = requireAttendanceSpreadsheet_();
+  setupAttendanceSpreadsheet_(attendance);
+  const rows = refreshPtoBalances_(attendance);
+  applyAttendanceFormatting_(attendance);
+  return {
+    rowsWritten: rows.length,
+    message: `${rows.length} PTO balance row(s) refreshed.`
+  };
 }
 
 function getCalculatePayPeriodDialogData() {
@@ -1118,6 +1379,9 @@ function setupAttendanceSpreadsheet_(ss) {
   ensureSheet_(ss, CONFIG.attendanceTabs.holidays, HEADERS.holidays);
   ensureSheet_(ss, CONFIG.attendanceTabs.events, HEADERS.events);
   ensureSheet_(ss, CONFIG.attendanceTabs.log, HEADERS.log);
+  ensureSheet_(ss, CONFIG.attendanceTabs.timeOffRequests, HEADERS.timeOffRequests);
+  ensureSheet_(ss, CONFIG.attendanceTabs.ptoBalances, HEADERS.ptoBalances);
+  ensureSheet_(ss, CONFIG.attendanceTabs.makeupRequests, HEADERS.makeupRequests);
   ensureScorecardSheet_(ss);
   removeDefaultBlankSheet_(ss);
   applyAttendanceFormatting_(ss);
@@ -2175,15 +2439,15 @@ function formatWorkflowInstructionsSheet_(sheet, lastRow, workbookType) {
 
 function getAttendanceWorkflowGuide_() {
   return {
-    eyebrow: 'PHASE 1-3 OPERATING GUIDE',
+    eyebrow: 'PHASE 1-4 OPERATING GUIDE',
     title: 'Attendance Workflow Instructions',
-    subtitle: 'Use this workbook to collect clock events, maintain schedules, and produce the reviewed attendance log that payroll consumes.',
+    subtitle: 'Use this workbook to collect clock events, manage approved leave, maintain schedules, and produce the reviewed attendance log that payroll consumes.',
     workbook: CONFIG.attendanceSpreadsheetName,
     owner: 'Operations manager',
     entryPoint: 'Attendance menu',
     beforeUse: 'Confirm employees, schedules, and web app access.',
     cadence: 'Daily review, pay-period closeout',
-    scope: 'Time capture, corrections, attendance status, scorecards',
+    scope: 'Time capture, corrections, leave approvals, attendance status, scorecards',
     sections: [
       {
         eyebrow: 'SECTION 01',
@@ -2195,9 +2459,11 @@ function getAttendanceWorkflowGuide_() {
           ['2', 'Operations manager', 'Review active employees and schedules before sharing the clock app.', 'Employees and Work Schedules', 'Before launch', 'Every active employee has a schedule and, if needed, a Web App PIN.'],
           ['3', 'Employee', 'Clock in, start lunch, end lunch, and clock out in sequence.', 'Clock-in web app', 'Each workday', 'Clock Events receives an append-only record for each action.'],
           ['4', 'Operations manager', 'Add missed or corrected punches without editing the audit trail directly.', 'Attendance menu', 'Same day when possible', 'Manual corrections show Source = MANUAL with useful notes.'],
-          ['5', 'Operations manager', 'Rebuild the Attendance Log after corrections or before payroll.', 'Attendance menu', 'Daily and at closeout', 'Attendance Log shows status, hours, late minutes, and exceptions.'],
-          ['6', 'Operations manager', 'Generate employee scorecards for the selected month.', 'Attendance menu', 'Monthly review', 'Scorecard shows only attendance data and is safe to share.'],
-          ['7', 'Payroll processor', 'Use the reviewed log as the source for pay-period calculation.', 'Payroll workbook', 'After closeout', 'Payroll Output is generated from the latest attendance data.']
+          ['5', 'Employee or manager', 'Submit PTO, UTO, Non-PTO, or makeup hour requests before closeout.', 'Clock app or Attendance menu', 'As needed', 'The request appears as Pending in the request tabs.'],
+          ['6', 'Operations manager', 'Approve or deny pending time off and makeup requests.', 'Attendance menu', 'Before payroll closeout', 'Approved time off can rebuild into Attendance Log; approved makeup can offset short hours.'],
+          ['7', 'Operations manager', 'Rebuild the Attendance Log after corrections or approvals.', 'Attendance menu', 'Daily and at closeout', 'Attendance Log shows status, hours, late minutes, and exceptions.'],
+          ['8', 'Operations manager', 'Generate employee scorecards for the selected month.', 'Attendance menu', 'Monthly review', 'Scorecard shows only attendance data and is safe to share.'],
+          ['9', 'Payroll processor', 'Use the reviewed log as the source for pay-period calculation.', 'Payroll workbook', 'After closeout', 'Payroll Output is generated from the latest attendance data.']
         ]
       },
       {
@@ -2211,6 +2477,9 @@ function getAttendanceWorkflowGuide_() {
           ['Holidays', 'Paid holiday exceptions.', 'Operations manager', 'Yes', 'Date, Paid?, Applies To', 'Use All unless the holiday is employee-specific.'],
           ['Clock Events', 'Append-only clock event ledger.', 'Employees and managers', 'Append only', 'Timestamp, Employee Code, Event Type, Source', 'Do not delete production events; add a corrective manual event instead.'],
           ['Attendance Log', 'Calculated daily status and payroll source.', 'Operations and payroll', 'Limited review', 'Status, Worked Hours, Late Minutes', 'Rebuild after source changes; override only PTO/UTO/Non-PTO/Holiday status.'],
+          ['Time Off Requests', 'Pending and approved PTO, UTO, and Non-PTO requests.', 'Employees and managers', 'Via dialog preferred', 'Type, dates, hours/days, status', 'Approve requests before payroll; approved rows rebuild into Attendance Log.'],
+          ['PTO Balances', 'Annual allowance, used, and remaining balances.', 'Operations manager', 'Script-updated', 'PTO and Non-PTO allowance/usage', 'Refresh from menu after comp or request changes.'],
+          ['Makeup Hour Requests', 'Pending and approved makeup hours.', 'Employees and managers', 'Via dialog preferred', 'Date, hours, status', 'Approved rows can offset short-hour deductions during payroll calculation.'],
           ['Scorecard', 'Shareable one-employee attendance scorecard.', 'Operations manager', 'Script-rendered', 'Bonus status, stats, exception days', 'Use Attendance > View Scorecard to refresh this tab.']
         ]
       },
@@ -2222,6 +2491,7 @@ function getAttendanceWorkflowGuide_() {
         rows: [
           ['Daily', 'Operations manager', 'Employees scheduled today have clock-in activity.', 'Clock Events', 'Add missing manual entries with notes.', 'Follow up with employee if the workday cannot be confirmed.'],
           ['Daily', 'Operations manager', 'Incomplete rows have a documented resolution path.', 'Attendance Log', 'Add missing clock-out or leave status unresolved for payroll review.', 'Payroll should not pay incomplete days without review.'],
+          ['Weekly', 'Operations manager', 'Pending leave and makeup requests are cleared before they affect pay.', 'Time Off Requests and Makeup Hour Requests', 'Approve or deny from the Attendance menu.', 'Rebuild attendance after time off approvals.'],
           ['Weekly', 'Operations manager', 'New hires and resignations are reflected in roster dates.', 'Employees', 'Set Start Date, End Date, and Status.', 'Coordinate lifecycle notes in Payroll workbook.'],
           ['Monthly', 'Operations manager', 'Scorecards explain bonus eligibility without showing pay data.', 'Attendance menu', 'Run View Scorecard.', 'Send only the scorecard, not payroll tabs.'],
           ['Pay close', 'Operations manager', 'Log is rebuilt for the full pay period.', 'Attendance menu', 'Run Rebuild Attendance Log.', 'Do not calculate payroll from a stale log.']
@@ -2245,9 +2515,9 @@ function getAttendanceWorkflowGuide_() {
 
 function getPayrollWorkflowGuide_() {
   return {
-    eyebrow: 'PHASE 1-3 OPERATING GUIDE',
+    eyebrow: 'PHASE 1-4 OPERATING GUIDE',
     title: 'Payroll Workflow Instructions',
-    subtitle: 'Use this workbook to maintain private compensation data, calculate the pay period, and produce the payroll output for review.',
+    subtitle: 'Use this workbook to maintain private compensation data, calculate the pay period, and produce payroll output from approved attendance, leave, and makeup-hour inputs.',
     workbook: CONFIG.payrollSpreadsheetName,
     owner: 'Payroll processor',
     entryPoint: 'Payroll menu',
@@ -2261,7 +2531,7 @@ function getPayrollWorkflowGuide_() {
         description: 'A focused payroll run sequence that preserves review points before payment.',
         headers: ['Step', 'Owner', 'Action', 'Where', 'When', 'Done When'],
         rows: [
-          ['1', 'Operations manager', 'Rebuild Attendance Log for the target period.', 'Attendance workbook', 'Before calculation', 'Attendance statuses and late minutes are current.'],
+          ['1', 'Operations manager', 'Approve pending time off and makeup requests, then rebuild Attendance Log for the target period.', 'Attendance workbook', 'Before calculation', 'Attendance statuses, approved leave, makeup hours, and late minutes are current.'],
           ['2', 'Payroll processor', 'Review Compensation Master for blanks and effective dates.', 'Compensation Master', 'Before calculation', 'Every paid employee has an active compensation row.'],
           ['3', 'Payroll processor', 'Confirm or create the target pay period.', 'Pay Periods', 'Each run', 'Period ID, dates, type, and status are correct.'],
           ['4', 'Payroll processor', 'Enter KPI approvals, additional bonuses, and adjustments.', 'Payroll menu', 'Before calculation', 'Bonuses & Adjustments has approved entries with descriptions.'],
@@ -2298,6 +2568,8 @@ function getPayrollWorkflowGuide_() {
           ['Late deduction', 'Payroll Calculations', 'Late Minutes > 0', 'Late start or late lunch return.', 'Review against policy and correct source events if needed.', 'Payroll approver'],
           ['Short hours deduction', 'Payroll Calculations', 'Short Hours > 0', 'Worked hours are below eight for a scheduled day.', 'Confirm early leave, correction, or override path.', 'Payroll approver'],
           ['Benefits', 'Payroll Calculations', 'Benefits and Benefit Eligible Days', 'Mid-month starts, exits, UTO, or Non-PTO can prorate benefits.', 'Review proration notes before approval.', 'Payroll approver'],
+          ['Approved leave', 'Attendance Log', 'Status = PTO, UTO, or Non-PTO', 'A manager approved a time off request.', 'Confirm the approval and dates before paying.', 'Operations manager'],
+          ['Makeup hours', 'Payroll Calculations', 'Notes mention approved makeup hours', 'Approved makeup offset short-hour deductions.', 'Confirm unused hours are intentional.', 'Payroll approver'],
           ['Attendance bonus', 'Payroll Calculations', 'Attendance Bonus Status', 'Monthly eligibility is calculated after month close on Mid payrolls.', 'Review the status and notes before approving output.', 'Payroll approver'],
           ['Quarterly PA bonus', 'Quarterly PA Tracker', 'Eligible? = No or amount blank', 'One or more months were not perfect, or bonus amount is blank.', 'Review quarter details and Compensation Master.', 'Payroll processor'],
           ['KPI and adjustments', 'Bonuses & Adjustments', 'Manual entries affect Payroll Output', 'A bonus or adjustment was approved outside attendance logic.', 'Confirm description, amount, and approver.', 'Payroll approver']
@@ -2365,6 +2637,7 @@ function buildPayrollContext_(attendance, payroll, periodStart, periodEnd) {
     employees: mapByCode_(readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees))),
     schedules: readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules)),
     attendanceRows: readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.log)),
+    makeupRows: readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.makeupRequests)),
     compRows: readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp)),
     bonusRows: readObjects_(getSheet_(payroll, CONFIG.payrollTabs.bonuses)),
     periodStart,
@@ -2412,6 +2685,9 @@ function calculateEmployeePay_(employeeCode, period, context) {
   let absentDays = 0;
   let shortHours = 0;
   let incompleteDays = 0;
+  const approvedMakeupHours = sumApprovedMakeupHoursForPeriod_(context.makeupRows || [], code, periodStart, periodEnd);
+  let remainingMakeupHours = approvedMakeupHours;
+  let makeupHoursApplied = 0;
 
   periodLogRows.forEach(row => {
     const status = row.Status || '';
@@ -2432,8 +2708,12 @@ function calculateEmployeePay_(employeeCode, period, context) {
       return;
     }
     if (worked !== '') {
-      workedHours += worked;
-      if (worked < 8) shortHours += 8 - worked;
+      const shortfall = Math.max(0, 8 - worked);
+      const appliedMakeup = Math.min(shortfall, remainingMakeupHours);
+      remainingMakeupHours -= appliedMakeup;
+      makeupHoursApplied += appliedMakeup;
+      workedHours += worked + appliedMakeup;
+      if (shortfall > appliedMakeup) shortHours += shortfall - appliedMakeup;
     }
   });
 
@@ -2462,6 +2742,8 @@ function calculateEmployeePay_(employeeCode, period, context) {
   const notes = [];
   if (absentDays) notes.push(`${absentDays} absent day(s).`);
   if (incompleteDays) notes.push(`${incompleteDays} incomplete day(s); verify clock events before payment.`);
+  if (makeupHoursApplied) notes.push(`${round2_(makeupHoursApplied)} approved makeup hour(s) offset short-hours deductions.`);
+  if (remainingMakeupHours) notes.push(`${round2_(remainingMakeupHours)} approved makeup hour(s) unused in this pay period.`);
   if (!scheduledDays) notes.push('No scheduled days in this pay period.');
   if (benefits.notes) notes.push(`Benefits: ${benefits.notes}`);
   if (attendanceBonus.status !== 'Not due') notes.push(`Attendance bonus ${attendanceBonus.status}: ${attendanceBonus.notes}`);
@@ -2597,18 +2879,33 @@ function applyAttendanceFormatting_(ss) {
   setupSheetFormatting_(getSheet_(ss, CONFIG.attendanceTabs.holidays), HEADERS.holidays.length);
   setupSheetFormatting_(getSheet_(ss, CONFIG.attendanceTabs.events), HEADERS.events.length);
   setupSheetFormatting_(getSheet_(ss, CONFIG.attendanceTabs.log), HEADERS.log.length);
+  setupSheetFormatting_(getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests), HEADERS.timeOffRequests.length);
+  setupSheetFormatting_(getSheet_(ss, CONFIG.attendanceTabs.ptoBalances), HEADERS.ptoBalances.length);
+  setupSheetFormatting_(getSheet_(ss, CONFIG.attendanceTabs.makeupRequests), HEADERS.makeupRequests.length);
   formatScorecardSheet_(getSheet_(ss, CONFIG.attendanceTabs.scorecard));
 
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.employees), 4, ['Active', 'Inactive', 'Resigned', 'Terminated']);
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.events), 4, CONFIG.eventTypes);
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.events), 5, ['WEB_APP', 'MANUAL', 'IMPORTED']);
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.log), 16, CONFIG.statuses);
+  setValidation_(getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests), 3, CONFIG.timeOffTypes);
+  setValidation_(getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests), 8, CONFIG.requestStatuses);
+  setValidation_(getSheet_(ss, CONFIG.attendanceTabs.makeupRequests), 6, CONFIG.requestStatuses);
 
   getSheet_(ss, CONFIG.attendanceTabs.employees).getRange('E:F').setNumberFormat('yyyy-mm-dd');
+  getSheet_(ss, CONFIG.attendanceTabs.holidays).getRange('A:A').setNumberFormat('yyyy-mm-dd');
   getSheet_(ss, CONFIG.attendanceTabs.events).getRange('B:B').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
   getSheet_(ss, CONFIG.attendanceTabs.log).getRange('A:A').setNumberFormat('yyyy-mm-dd');
   getSheet_(ss, CONFIG.attendanceTabs.log).getRange('D:M').setNumberFormat('h:mm AM/PM');
   getSheet_(ss, CONFIG.attendanceTabs.log).getRange('N:O').setNumberFormat('0.00');
+  getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests).getRange('D:E').setNumberFormat('yyyy-mm-dd');
+  getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests).getRange('F:F').setNumberFormat('0.00');
+  getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests).getRange('J:J').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
+  getSheet_(ss, CONFIG.attendanceTabs.ptoBalances).getRange('B:B').setNumberFormat('0');
+  getSheet_(ss, CONFIG.attendanceTabs.ptoBalances).getRange('C:H').setNumberFormat('0.00');
+  getSheet_(ss, CONFIG.attendanceTabs.makeupRequests).getRange('C:C').setNumberFormat('yyyy-mm-dd');
+  getSheet_(ss, CONFIG.attendanceTabs.makeupRequests).getRange('D:D').setNumberFormat('0.00');
+  getSheet_(ss, CONFIG.attendanceTabs.makeupRequests).getRange('H:H').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
   applySpreadsheetChrome_(ss, 'attendance');
 }
 
@@ -2772,7 +3069,8 @@ function buildAttendanceLogRow_(date, employee, schedule, events, holidays, over
   }
 
   const derivedStatus = deriveAttendanceStatus_(daySchedule.isScheduled, holiday, parts);
-  const status = overrideStatus || derivedStatus;
+  const canApplyOverride = overrideStatus === 'Holiday' || (overrideStatus && daySchedule.isScheduled && !holiday);
+  const status = canApplyOverride ? overrideStatus : derivedStatus;
 
   return [
     dateOnly_(date),
@@ -2955,7 +3253,279 @@ function readAttendanceStatusOverrides_(ss, startDate, endDate) {
     if (rowDate.getTime() < dateOnly_(startDate).getTime() || rowDate.getTime() > dateOnly_(endDate).getTime()) return;
     overrides[`${formatDateKey_(rowDate)}|${normalizeCode_(row['Employee Code'])}`] = status;
   });
+  const approved = readApprovedTimeOffOverrides_(ss, startDate, endDate);
+  Object.keys(approved).forEach(key => {
+    overrides[key] = approved[key];
+  });
   return overrides;
+}
+
+function readApprovedTimeOffOverrides_(ss, startDate, endDate) {
+  const overrides = {};
+  if (!hasSheet_(ss, CONFIG.attendanceTabs.timeOffRequests)) return overrides;
+  const rows = readObjects_(getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests));
+  rows.forEach(row => {
+    if (row['Status (Pending/Approved/Denied)'] !== 'Approved') return;
+    const type = row['Type (PTO/UTO/Non-PTO)'];
+    if (CONFIG.timeOffTypes.indexOf(type) === -1) return;
+    const code = normalizeCode_(row['Employee Code']);
+    const requestStart = parseDateOrBlank_(row['Start Date']);
+    const requestEnd = parseDateOrBlank_(row['End Date']);
+    if (!code || !requestStart || !requestEnd) return;
+
+    const start = maxDate_(dateOnly_(requestStart), dateOnly_(startDate));
+    const end = minDate_(dateOnly_(requestEnd), dateOnly_(endDate));
+    if (start.getTime() > end.getTime()) return;
+    for (let cursor = start; cursor.getTime() <= end.getTime(); cursor = addDays_(cursor, 1)) {
+      overrides[`${formatDateKey_(cursor)}|${code}`] = type;
+    }
+  });
+  return overrides;
+}
+
+function createTimeOffRequest_(payload, source) {
+  payload = payload || {};
+  const attendance = requireAttendanceSpreadsheet_();
+  setupAttendanceSpreadsheet_(attendance);
+  const employeeCode = normalizeCode_(payload.employeeCode);
+  const employee = getEmployeeRowByCode_(attendance, employeeCode);
+  if (!employee) throw new Error('Select an active employee.');
+
+  const type = String(payload.type || '').trim();
+  if (CONFIG.timeOffTypes.indexOf(type) === -1) throw new Error('Select PTO, UTO, or Non-PTO.');
+  const startDate = parseDateOrBlank_(payload.startDate);
+  const endDate = parseDateOrBlank_(payload.endDate);
+  if (!startDate || !endDate) throw new Error('Start Date and End Date are required.');
+  if (dateOnly_(startDate).getTime() > dateOnly_(endDate).getTime()) {
+    throw new Error('End Date must be on or after Start Date.');
+  }
+  const hoursDays = toNumberOrBlank_(payload.hoursDays || payload.units || payload.days);
+  if (hoursDays === '' || hoursDays <= 0) throw new Error('Enter Hours/Days greater than zero.');
+  const reason = String(payload.reason || '').trim();
+  if (!reason) throw new Error('Reason is required.');
+  const requestId = makeId_('TO');
+  const notes = `Submitted via ${source === 'WEB_APP' ? 'clock app' : 'sheet menu'} by ${getActiveUserEmail_() || employeeCode}.`;
+
+  appendRows_(getSheet_(attendance, CONFIG.attendanceTabs.timeOffRequests), [[
+    requestId,
+    employeeCode,
+    type,
+    dateOnly_(startDate),
+    dateOnly_(endDate),
+    round2_(hoursDays),
+    reason,
+    'Pending',
+    '',
+    '',
+    notes
+  ]]);
+  refreshPtoBalances_(attendance);
+  applyAttendanceFormatting_(attendance);
+  return { requestId, employeeCode, type };
+}
+
+function createMakeupHourRequest_(payload, source) {
+  payload = payload || {};
+  const attendance = requireAttendanceSpreadsheet_();
+  setupAttendanceSpreadsheet_(attendance);
+  const employeeCode = normalizeCode_(payload.employeeCode);
+  const employee = getEmployeeRowByCode_(attendance, employeeCode);
+  if (!employee) throw new Error('Select an active employee.');
+
+  const date = parseDateOrBlank_(payload.date);
+  if (!date) throw new Error('Date is required.');
+  const hours = toNumberOrBlank_(payload.hoursRequested || payload.hours);
+  if (hours === '' || hours <= 0) throw new Error('Enter makeup hours greater than zero.');
+  const reason = String(payload.reason || '').trim();
+  if (!reason) throw new Error('Reason is required.');
+  const requestId = makeId_('MU');
+  const sourceNote = source === 'WEB_APP' ? 'clock app' : 'sheet menu';
+
+  appendRows_(getSheet_(attendance, CONFIG.attendanceTabs.makeupRequests), [[
+    requestId,
+    employeeCode,
+    dateOnly_(date),
+    round2_(hours),
+    `${reason} (Submitted via ${sourceNote}.)`,
+    'Pending',
+    '',
+    ''
+  ]]);
+  applyAttendanceFormatting_(attendance);
+  return { requestId, employeeCode };
+}
+
+function getEmployeeRowByCode_(attendance, employeeCode) {
+  const code = normalizeCode_(employeeCode);
+  if (!code) return null;
+  return readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees))
+    .filter(row => normalizeCode_(row['Employee Code']) === code && (row.Status === 'Active' || row.Status === ''))[0] || null;
+}
+
+function getEmployeeDisplayMap_(attendance) {
+  const map = {};
+  readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees)).forEach(row => {
+    const code = normalizeCode_(row['Employee Code']);
+    if (!code) return;
+    map[code] = row['Display Name'] || row['Full Name'] || code;
+  });
+  return map;
+}
+
+function refreshPtoBalances_(attendance) {
+  const employees = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees));
+  const requests = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timeOffRequests));
+  const compRows = getPayrollCompRowsSafe_();
+  const usage = summarizeApprovedTimeOffUsage_(requests);
+  const yearsByEmployee = {};
+  const currentYear = new Date().getFullYear();
+
+  employees.forEach(employee => {
+    const code = normalizeCode_(employee['Employee Code']);
+    if (!code || (employee.Status && employee.Status !== 'Active')) return;
+    if (!yearsByEmployee[code]) yearsByEmployee[code] = {};
+    yearsByEmployee[code][currentYear] = true;
+  });
+
+  Object.keys(usage).forEach(key => {
+    const parts = key.split('|');
+    const code = parts[0];
+    const year = parts[1];
+    if (!yearsByEmployee[code]) yearsByEmployee[code] = {};
+    yearsByEmployee[code][year] = true;
+  });
+
+  const rows = [];
+  Object.keys(yearsByEmployee).sort().forEach(code => {
+    Object.keys(yearsByEmployee[code]).sort().forEach(yearText => {
+      const year = Number(yearText);
+      const used = usage[`${code}|${year}`] || { pto: 0, nonPto: 0 };
+      const comp = getCompForYear_(compRows, code, year);
+      const annualPto = comp ? toNumberOrBlank_(comp['Annual PTO Days']) : '';
+      const annualNonPto = comp ? toNumberOrBlank_(comp['Annual Non-PTO Days']) : '';
+      rows.push([
+        code,
+        year,
+        annualPto,
+        round2_(used.pto),
+        annualPto === '' ? '' : round2_(annualPto - used.pto),
+        annualNonPto,
+        round2_(used.nonPto),
+        annualNonPto === '' ? '' : round2_(annualNonPto - used.nonPto)
+      ]);
+    });
+  });
+
+  writeRowsReplacingData_(getSheet_(attendance, CONFIG.attendanceTabs.ptoBalances), HEADERS.ptoBalances, rows);
+  return rows;
+}
+
+function getPtoBalanceSummaryForEmployee_(employeeCode, year) {
+  try {
+    const attendance = requireAttendanceSpreadsheet_();
+    if (!hasSheet_(attendance, CONFIG.attendanceTabs.ptoBalances)) return null;
+    return getPtoBalanceSummariesByEmployee_(attendance, year)[normalizeCode_(employeeCode)] || null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function getPtoBalanceSummariesByEmployee_(attendance, year) {
+  if (!hasSheet_(attendance, CONFIG.attendanceTabs.ptoBalances)) return {};
+  const summaries = {};
+  readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.ptoBalances)).forEach(row => {
+    if (Number(row.Year) !== Number(year)) return;
+    const code = normalizeCode_(row['Employee Code']);
+    if (!code) return;
+    summaries[code] = {
+      annualPto: toNumberOrBlank_(row['Annual PTO Allowance']),
+      usedPto: toNumberOrBlank_(row['Used PTO']),
+      remainingPto: toNumberOrBlank_(row['Remaining PTO']),
+      annualNonPto: toNumberOrBlank_(row['Annual Non-PTO Allowance']),
+      usedNonPto: toNumberOrBlank_(row['Used Non-PTO']),
+      remainingNonPto: toNumberOrBlank_(row['Remaining Non-PTO'])
+    };
+  });
+  return summaries;
+}
+
+function summarizeApprovedTimeOffUsage_(requests) {
+  const usage = {};
+  requests.forEach(row => {
+    if (row['Status (Pending/Approved/Denied)'] !== 'Approved') return;
+    const type = row['Type (PTO/UTO/Non-PTO)'];
+    if (type !== 'PTO' && type !== 'Non-PTO') return;
+    const code = normalizeCode_(row['Employee Code']);
+    const start = parseDateOrBlank_(row['Start Date']);
+    const end = parseDateOrBlank_(row['End Date']);
+    const units = toNumberOrBlank_(row['Hours/Days']);
+    if (!code || !start || !end || units === '') return;
+    const totalDays = countInclusiveDays_(start, end);
+    if (!totalDays) return;
+
+    for (let year = start.getFullYear(); year <= end.getFullYear(); year += 1) {
+      const segmentStart = maxDate_(dateOnly_(start), new Date(year, 0, 1));
+      const segmentEnd = minDate_(dateOnly_(end), new Date(year, 11, 31));
+      if (segmentStart.getTime() > segmentEnd.getTime()) continue;
+      const segmentUnits = units * (countInclusiveDays_(segmentStart, segmentEnd) / totalDays);
+      const key = `${code}|${year}`;
+      if (!usage[key]) usage[key] = { pto: 0, nonPto: 0 };
+      if (type === 'PTO') usage[key].pto += segmentUnits;
+      if (type === 'Non-PTO') usage[key].nonPto += segmentUnits;
+    }
+  });
+  return usage;
+}
+
+function getPayrollCompRowsSafe_() {
+  try {
+    const payroll = requirePayrollSpreadsheet_();
+    if (!hasSheet_(payroll, CONFIG.payrollTabs.comp)) return [];
+    return readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp));
+  } catch (error) {
+    return [];
+  }
+}
+
+function getCompForYear_(compRows, employeeCode, year) {
+  const code = normalizeCode_(employeeCode);
+  const yearStart = new Date(year, 0, 1);
+  const yearEnd = new Date(year, 11, 31);
+  const candidates = compRows.filter(row => {
+    if (normalizeCode_(row['Employee Code']) !== code) return false;
+    const effectiveFrom = parseDateOrBlank_(row['Effective From']);
+    const effectiveTo = parseDateOrBlank_(row['Effective To']);
+    return (!effectiveFrom || dateOnly_(effectiveFrom).getTime() <= yearEnd.getTime())
+      && (!effectiveTo || dateOnly_(effectiveTo).getTime() >= yearStart.getTime());
+  });
+  candidates.sort((a, b) => {
+    const aDate = parseDateOrBlank_(a['Effective From']);
+    const bDate = parseDateOrBlank_(b['Effective From']);
+    return (bDate ? bDate.getTime() : 0) - (aDate ? aDate.getTime() : 0);
+  });
+  return candidates[0] || null;
+}
+
+function sumApprovedMakeupHoursForPeriod_(makeupRows, employeeCode, periodStart, periodEnd) {
+  const code = normalizeCode_(employeeCode);
+  const start = dateOnly_(periodStart).getTime();
+  const end = dateOnly_(periodEnd).getTime();
+  return makeupRows.reduce((sum, row) => {
+    if (row['Status (Pending/Approved/Denied)'] !== 'Approved') return sum;
+    if (normalizeCode_(row['Employee Code']) !== code) return sum;
+    const date = parseDateOrBlank_(row.Date);
+    if (!date) return sum;
+    const time = dateOnly_(date).getTime();
+    if (time < start || time > end) return sum;
+    return sum + toNumberOrZero_(row['Hours Requested']);
+  }, 0);
+}
+
+function countInclusiveDays_(startDate, endDate) {
+  const start = dateOnly_(startDate).getTime();
+  const end = dateOnly_(endDate).getTime();
+  if (end < start) return 0;
+  return Math.round((end - start) / 86400000) + 1;
 }
 
 function getDefaultAttendanceLogStartDate_(ss) {
