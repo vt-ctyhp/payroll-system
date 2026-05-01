@@ -511,6 +511,9 @@
 
       function renderBalanceLine(balance) {
         if (!balance) return '';
+        if (balance.unavailable) {
+          return `<p class="balance-line">${escapeHtml(balance.message || 'PTO balance unavailable.')}</p>`;
+        }
         const plan = balance.ptoPlanType || 'PTO';
         const earned = formatBalance(balance.earnedPto);
         const pto = formatBalance(balance.remainingPto);

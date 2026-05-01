@@ -774,6 +774,12 @@ function getAddEmployeeDefaults() {
 }
 
 function addEmployee(payload) {
+  return withScriptLock_('Add Employee', function() {
+    return addEmployee_(payload);
+  });
+}
+
+function addEmployee_(payload) {
   payload = payload || {};
   const code = normalizeCode_(payload.employeeCode || suggestEmployeeCode_(payload.fullName));
   if (!code) throw new Error('Employee Code is required.');
@@ -1019,6 +1025,12 @@ function getPendingRequestsDialogData() {
 }
 
 function processPendingRequests(payload) {
+  return withScriptLock_('Process Pending Requests', function() {
+    return processPendingRequests_(payload);
+  });
+}
+
+function processPendingRequests_(payload) {
   payload = payload || {};
   const decisions = (payload.decisions || [])
     .map(decision => ({
@@ -1118,11 +1130,24 @@ function getCalculatePayPeriodDialogData() {
     type: row['Period Type (Mid / EOM)'],
     status: row['Status (Open / Calculated / Paid)']
   }));
+  const defaultPeriodId = getDefaultOpenPeriodId_(periods);
   return {
     periods,
-    defaultPeriodId: getDefaultOpenPeriodId_(periods),
-    employees: listEmployeesForUi_().filter(employee => employee.status === 'Active')
+    defaultPeriodId,
+    employees: defaultPeriodId ? getCalculatePayPeriodEmployees(defaultPeriodId) : []
   };
+}
+
+function getCalculatePayPeriodEmployees(periodId) {
+  const payroll = requirePayrollSpreadsheet_();
+  const attendance = requireAttendanceSpreadsheet_();
+  const period = getPayPeriodById_(payroll, periodId);
+  const periodStart = parseDateOrBlank_(period['Period Start']);
+  const periodEnd = parseDateOrBlank_(period['Period End']);
+  if (!periodStart || !periodEnd) throw new Error(`Pay period ${periodId} is missing start or end dates.`);
+  return readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees))
+    .filter(employee => employeeEmployedInRange_(employee, periodStart, periodEnd))
+    .map(mapEmployeeRowForUi_);
 }
 
 function getScorecardDialogData() {
@@ -1151,13 +1176,16 @@ function getKpiBonusPeriodData(periodId) {
   const attendance = requireAttendanceSpreadsheet_();
   ensurePhase3PayrollSheets_(payroll);
   const period = getPayPeriodById_(payroll, periodId);
+  const periodStart = parseDateOrBlank_(period['Period Start']);
   const periodEnd = parseDateOrBlank_(period['Period End']);
+  if (!periodStart || !periodEnd) throw new Error(`Pay period ${periodId} is missing start or end dates.`);
   const compRows = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp));
   const bonusRows = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.bonuses));
   const existing = groupBonusRowsByEmployee_(bonusRows, periodId, 'KPI');
 
-  const employees = listEmployeesForUi_()
-    .filter(employee => employee.status === 'Active')
+  const employees = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees))
+    .filter(employee => employeeEmployedInRange_(employee, periodStart, periodEnd))
+    .map(employee => mapEmployeeRowForUi_(employee))
     .map(employee => {
       const comp = getCompForDate_(compRows, employee.employeeCode, periodEnd);
       const kpiMax = comp ? toNumberOrBlank_(comp['Monthly KPI Bonus (Max)']) : '';
@@ -1181,6 +1209,12 @@ function getKpiBonusPeriodData(periodId) {
 }
 
 function saveKpiBonuses(payload) {
+  return withScriptLock_('Save KPI Bonuses', function() {
+    return saveKpiBonuses_(payload);
+  });
+}
+
+function saveKpiBonuses_(payload) {
   payload = payload || {};
   const periodId = payload.periodId;
   if (!periodId) throw new Error('Select a pay period.');
@@ -1237,6 +1271,12 @@ function getBonusAdjustmentDialogData(entryMode) {
 }
 
 function addBonusAdjustment(payload) {
+  return withScriptLock_('Add Bonus Adjustment', function() {
+    return addBonusAdjustment_(payload);
+  });
+}
+
+function addBonusAdjustment_(payload) {
   payload = payload || {};
   const periodId = payload.periodId;
   const employeeCode = normalizeCode_(payload.employeeCode);
@@ -1284,11 +1324,12 @@ function getCompensationChangeDialogData() {
   };
 }
 
-function getCompensationChangeEmployeeData(employeeCode) {
+function getCompensationChangeEmployeeData(employeeCode, effectiveFrom) {
   const payroll = requirePayrollSpreadsheet_();
   setupPayrollSpreadsheet_(payroll);
   const code = normalizeCode_(employeeCode);
-  const current = getCurrentCompRow_(payroll, code, new Date());
+  const effectiveDate = parseDateOrBlank_(effectiveFrom) || new Date();
+  const current = getCurrentCompRow_(payroll, code, effectiveDate);
   if (!current) throw new Error(`${code} has no current compensation row.`);
   return {
     employeeCode: code,
@@ -1306,6 +1347,12 @@ function getCompensationChangeEmployeeData(employeeCode) {
 }
 
 function saveCompensationChange(payload) {
+  return withScriptLock_('Save Compensation Change', function() {
+    return saveCompensationChange_(payload);
+  });
+}
+
+function saveCompensationChange_(payload) {
   payload = payload || {};
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
@@ -1353,6 +1400,11 @@ function saveCompensationChange(payload) {
   });
   if (!changes.length) throw new Error('Enter at least one changed compensation value.');
 
+  const retroactive = Boolean(payload.retroactive);
+  const retroAdjustment = retroactive
+    ? prepareRetroactiveCompAdjustment_(attendance, payroll, code, current, nextValues, payload)
+    : { amount: '', periodId: '', row: null };
+
   compSheet.getRange(current._rowNumber, 3).setValue(addDays_(dateOnly_(effectiveFrom), -1));
   appendRows_(compSheet, [[
     code,
@@ -1371,10 +1423,6 @@ function saveCompensationChange(payload) {
     toNumberOrBlank_(nextValues['Monthly PTO Accrual Days'])
   ]]);
 
-  const retroactive = Boolean(payload.retroactive);
-  const retroAdjustment = retroactive
-    ? createRetroactiveCompAdjustment_(attendance, payroll, code, current, nextValues, payload)
-    : { amount: '', periodId: '' };
   const approvedBy = getActiveUserEmail_();
   const changeDate = new Date();
   const logRows = changes.map(change => [
@@ -1391,6 +1439,9 @@ function saveCompensationChange(payload) {
     change.field.header === 'Monthly Base Salary' ? retroAdjustment.amount : ''
   ]);
   appendRows_(getSheet_(payroll, CONFIG.payrollTabs.compChanges), logRows);
+  if (retroAdjustment.row) {
+    appendRows_(getSheet_(payroll, CONFIG.payrollTabs.bonuses), [retroAdjustment.row]);
+  }
 
   if (changes.some(change => ['Annual PTO Days', 'Annual Non-PTO Days', 'PTO Plan Type', 'Monthly PTO Accrual Days'].indexOf(change.field.header) !== -1)) {
     refreshPtoBalances_(attendance);
@@ -1428,6 +1479,12 @@ function getOffboardPreview(payload) {
 }
 
 function offboardEmployee(payload) {
+  return withScriptLock_('Offboard Employee', function() {
+    return offboardEmployee_(payload);
+  });
+}
+
+function offboardEmployee_(payload) {
   payload = payload || {};
   const code = normalizeCode_(payload.employeeCode);
   const eventType = String(payload.eventType || '').trim();
@@ -1444,21 +1501,25 @@ function offboardEmployee(payload) {
   setupAttendanceSpreadsheet_(attendance);
   const employee = getEmployeeRowByCode_(attendance, code);
   if (!employee) throw new Error(`${code} is not an active employee.`);
+  if (!getCurrentCompRow_(payroll, code, lastWorkingDay)) {
+    throw new Error(`${code} has no compensation row active on ${formatDateKey_(lastWorkingDay)}.`);
+  }
+  const schedule = getScheduleForDate_(readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules)), code, lastWorkingDay);
+  if (!schedule) throw new Error(`${code} has no work schedule active on ${formatDateKey_(lastWorkingDay)}.`);
 
   const finalPlan = buildFinalPayrollPlan_(payroll, code, lastWorkingDay);
   const finalPeriod = createOrUpdateFinalPayPeriod_(payroll, finalPlan);
-  setEmployeeEndDate_(attendance, code, lastWorkingDay);
-  closeEffectiveRowsThroughDate_(getSheet_(attendance, CONFIG.attendanceTabs.schedules), code, lastWorkingDay);
-  closeEffectiveRowsThroughDate_(getSheet_(payroll, CONFIG.payrollTabs.comp), code, lastWorkingDay);
   upsertFinalKpiBonus_(attendance, payroll, code, finalPeriod, lastWorkingDay);
   const ptoPayout = upsertFinalPtoPayoutAdjustment_(attendance, payroll, code, finalPeriod, lastWorkingDay);
 
-  const payrollResult = calculatePayPeriod({
+  const payrollResult = calculatePayPeriod_({
     periodId: finalPeriod.periodId,
     employeeCodes: [code]
   });
 
   setEmployeeStatus_(attendance, code, eventType, lastWorkingDay);
+  closeEffectiveRowsThroughDate_(getSheet_(attendance, CONFIG.attendanceTabs.schedules), code, lastWorkingDay);
+  closeEffectiveRowsThroughDate_(getSheet_(payroll, CONFIG.payrollTabs.comp), code, lastWorkingDay);
   appendRows_(getSheet_(payroll, CONFIG.payrollTabs.lifecycle), [[
     makeId_('LIFE'),
     code,
@@ -1506,6 +1567,12 @@ function getReactivateEmployeeData(employeeCode) {
 }
 
 function reactivateEmployee(payload) {
+  return withScriptLock_('Reactivate Employee', function() {
+    return reactivateEmployee_(payload);
+  });
+}
+
+function reactivateEmployee_(payload) {
   payload = payload || {};
   const code = normalizeCode_(payload.employeeCode);
   const startDate = parseDateOrBlank_(payload.startDate);
@@ -1625,6 +1692,12 @@ function refreshQuarterlyPaTracker() {
 }
 
 function calculatePayPeriod(payload) {
+  return withScriptLock_('Calculate Pay Period', function() {
+    return calculatePayPeriod_(payload);
+  });
+}
+
+function calculatePayPeriod_(payload) {
   payload = payload || {};
   const periodId = normalizePeriodId_(payload.periodId);
   if (!periodId) throw new Error('Select a pay period.');
@@ -1648,9 +1721,9 @@ function calculatePayPeriod(payload) {
   });
 
   const requestedCodes = (payload.employeeCodes || []).map(normalizeCode_).filter(Boolean);
-  const activeEmployees = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees))
-    .filter(row => row['Status'] === 'Active');
-  const employeeCodes = requestedCodes.length ? requestedCodes : activeEmployees.map(row => normalizeCode_(row['Employee Code']));
+  const periodEmployees = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees))
+    .filter(row => employeeEmployedInRange_(row, periodStart, periodEnd));
+  const employeeCodes = requestedCodes.length ? requestedCodes : periodEmployees.map(row => normalizeCode_(row['Employee Code']));
 
   const context = buildPayrollContext_(attendance, payroll, periodStart, periodEnd);
   const calculations = [];
@@ -1697,7 +1770,7 @@ function rebuildAttendanceLog(options) {
   if (!startDate || !endDate) throw new Error('Valid start and end dates are required.');
 
   const employees = readObjects_(getSheet_(ss, CONFIG.attendanceTabs.employees))
-    .filter(row => row['Status'] === 'Active' || row['Status'] === '');
+    .filter(row => employeeEmployedInRange_(row, startDate, endDate));
   const schedules = readObjects_(getSheet_(ss, CONFIG.attendanceTabs.schedules));
   const events = getClockEvents_(ss, startDate, endOfDay_(endDate));
   const holidays = readObjects_(getSheet_(ss, CONFIG.attendanceTabs.holidays));
@@ -1707,7 +1780,7 @@ function rebuildAttendanceLog(options) {
 
   for (let cursor = dateOnly_(startDate); cursor.getTime() <= dateOnly_(endDate).getTime(); cursor = addDays_(cursor, 1)) {
     employees.forEach(employee => {
-      if (!employeeActiveOnDate_(employee, cursor)) return;
+      if (!employeeEmployedOnDate_(employee, cursor)) return;
       const code = normalizeCode_(employee['Employee Code']);
       const schedule = getScheduleForDate_(schedules, code, cursor);
       const key = `${formatDateKey_(cursor)}|${code}`;
@@ -1717,13 +1790,38 @@ function rebuildAttendanceLog(options) {
     });
   }
 
-  writeRowsReplacingData_(getSheet_(ss, CONFIG.attendanceTabs.log), HEADERS.log, rows);
+  upsertAttendanceLogRowsForWindow_(getSheet_(ss, CONFIG.attendanceTabs.log), startDate, endDate, rows);
   applyAttendanceFormatting_(ss);
   return {
     rowsWritten: rows.length,
     startDate: formatDateKey_(startDate),
     endDate: formatDateKey_(endDate)
   };
+}
+
+function upsertAttendanceLogRowsForWindow_(sheet, startDate, endDate, generatedRows) {
+  const startTime = dateOnly_(startDate).getTime();
+  const endTime = dateOnly_(endDate).getTime();
+  const preservedRows = readObjects_(sheet)
+    .filter(row => {
+      const rowDate = parseDateOrBlank_(row.Date);
+      if (!rowDate) return true;
+      const rowTime = dateOnly_(rowDate).getTime();
+      return rowTime < startTime || rowTime > endTime;
+    })
+    .map(row => HEADERS.log.map(header => row[header] === undefined ? '' : row[header]));
+  const outputRows = preservedRows.concat(generatedRows);
+  const dateIdx = HEADERS.log.indexOf('Date');
+  const codeIdx = HEADERS.log.indexOf('Employee Code');
+  outputRows.sort((a, b) => {
+    const aDate = parseDateOrBlank_(a[dateIdx]);
+    const bDate = parseDateOrBlank_(b[dateIdx]);
+    const aTime = aDate ? dateOnly_(aDate).getTime() : 0;
+    const bTime = bDate ? dateOnly_(bDate).getTime() : 0;
+    if (aTime !== bTime) return aTime - bTime;
+    return String(a[codeIdx] || '').localeCompare(String(b[codeIdx] || ''));
+  });
+  writeRowsReplacingData_(sheet, HEADERS.log, outputRows);
 }
 
 function setupAttendanceSpreadsheet_(ss) {
@@ -2448,7 +2546,10 @@ function calculateBenefitsForPeriod_(employeeCode, employee, period, context, co
   const periodEnd = dateOnly_(parseDateOrBlank_(period['Period End']));
   const monthStart = new Date(periodStart.getFullYear(), periodStart.getMonth(), 1);
   const monthEnd = new Date(periodStart.getFullYear(), periodStart.getMonth() + 1, 0);
-  const totalScheduledDays = countScheduledDaysInMonth_(context.schedules, employeeCode, monthStart);
+  const finalPayroll = isFinalPayroll_(period);
+  const totalScheduledDays = finalPayroll
+    ? countScheduledDaysInRateMonth_(context.schedules, employeeCode, periodEnd)
+    : countScheduledDaysInMonth_(context.schedules, employeeCode, monthStart);
   if (monthlyBenefit === '') {
     return {
       monthlyBenefit: '',
@@ -2485,7 +2586,9 @@ function calculateBenefitsForPeriod_(employeeCode, employee, period, context, co
     const schedule = getScheduleForDate_(context.schedules, employeeCode, cursor);
     const daySchedule = getDaySchedule_(schedule, cursor);
     if (!daySchedule.isScheduled) continue;
-    const eligible = employeeActiveOnDate_(employee, cursor) && !unpaidStatusByDate[formatDateKey_(cursor)];
+    const eligible = employeeEmployedOnDate_(employee, cursor)
+      && (!finalPayroll || cursor.getTime() <= periodEnd.getTime())
+      && !unpaidStatusByDate[formatDateKey_(cursor)];
     if (!eligible) continue;
     eligibleDays += 1;
     if (cursor.getTime() >= periodStart.getTime() && cursor.getTime() <= periodEnd.getTime()) {
@@ -2503,10 +2606,15 @@ function calculateBenefitsForPeriod_(employeeCode, employee, period, context, co
     };
   }
 
-  const defaultSplit = eligibleDays === totalScheduledDays;
-  const amount = defaultSplit
-    ? monthlyBenefit / 2
-    : (monthlyBenefit * (eligibleDays / totalScheduledDays)) * (periodEligibleDays / eligibleDays);
+  const defaultSplit = !finalPayroll && eligibleDays === totalScheduledDays;
+  let amount;
+  if (finalPayroll) {
+    amount = monthlyBenefit * (eligibleDays / totalScheduledDays);
+  } else {
+    amount = defaultSplit
+      ? monthlyBenefit / 2
+      : (monthlyBenefit * (eligibleDays / totalScheduledDays)) * (periodEligibleDays / eligibleDays);
+  }
   return {
     monthlyBenefit,
     eligibleDays,
@@ -2514,7 +2622,9 @@ function calculateBenefitsForPeriod_(employeeCode, employee, period, context, co
     amount: round2_(amount),
     notes: defaultSplit
       ? 'Default 50/50 monthly benefit split applied.'
-      : `${eligibleDays} of ${totalScheduledDays} scheduled days benefit-eligible; ${periodEligibleDays} in this pay period.`
+      : finalPayroll
+        ? `${eligibleDays} of ${totalScheduledDays} scheduled days benefit-eligible through final working day.`
+        : `${eligibleDays} of ${totalScheduledDays} scheduled days benefit-eligible; ${periodEligibleDays} in this pay period.`
   };
 }
 
@@ -3059,7 +3169,10 @@ function calculateEmployeePay_(employeeCode, period, context) {
     return blankPayrollResult_(period, code, employeeName, 'Needs comp', 'Monthly Base Salary is blank in Compensation Master.');
   }
 
-  const scheduledDaysInMonth = countScheduledDaysInMonth_(context.schedules, code, periodStart);
+  const finalPayroll = isFinalPayroll_(period);
+  const scheduledDaysInMonth = finalPayroll
+    ? countScheduledDaysInRateMonth_(context.schedules, code, periodEnd)
+    : countScheduledDaysInMonth_(context.schedules, code, periodStart);
   if (!scheduledDaysInMonth) {
     return blankPayrollResult_(period, code, employeeName, 'Needs schedule', 'No scheduled days found for this calendar month.');
   }
@@ -3119,7 +3232,6 @@ function calculateEmployeePay_(employeeCode, period, context) {
   const shortHoursDeduction = shortHours * hourlyBaseRate;
   const totalDeductions = lateDeduction + absenceDeduction + shortHoursDeduction;
   const benefits = calculateBenefitsForPeriod_(code, employee, period, context, comp);
-  const finalPayroll = isFinalPayroll_(period);
   let attendanceBonus = calculateMonthlyAttendanceBonus_(code, period, context, comp);
   if (finalPayroll) {
     attendanceBonus = {
@@ -3789,7 +3901,7 @@ function getEmployeeDisplayMap_(attendance) {
 function refreshPtoBalances_(attendance) {
   const employees = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees));
   const requests = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timeOffRequests));
-  const compRows = getPayrollCompRowsSafe_();
+  const compRows = getPayrollCompRows_();
   const yearsByEmployee = {};
   const currentYear = new Date().getFullYear();
   const employeesByCode = {};
@@ -3844,7 +3956,9 @@ function refreshPtoBalances_(attendance) {
 function getPtoBalanceSummaryForEmployee_(employeeCode, year) {
   try {
     const attendance = requireAttendanceSpreadsheet_();
-    if (!hasSheet_(attendance, CONFIG.attendanceTabs.ptoBalances)) return null;
+    if (!hasSheet_(attendance, CONFIG.attendanceTabs.ptoBalances)) {
+      return buildUnavailablePtoBalanceSummary_('PTO balance unavailable. Attendance setup needs review.');
+    }
     let summaries = getPtoBalanceSummariesByEmployee_(attendance, year);
     if (!summaries[normalizeCode_(employeeCode)]) {
       refreshPtoBalances_(attendance);
@@ -3852,8 +3966,25 @@ function getPtoBalanceSummaryForEmployee_(employeeCode, year) {
     }
     return summaries[normalizeCode_(employeeCode)] || null;
   } catch (error) {
-    return null;
+    return buildUnavailablePtoBalanceSummary_('PTO balance unavailable. Payroll setup needs review.');
   }
+}
+
+function buildUnavailablePtoBalanceSummary_(message) {
+  return {
+    unavailable: true,
+    message,
+    ptoPlanType: '',
+    annualPto: '',
+    monthlyPtoAccrualDays: '',
+    earnedPto: '',
+    usedPto: '',
+    remainingPto: '',
+    payoutEligiblePto: '',
+    annualNonPto: '',
+    usedNonPto: '',
+    remainingNonPto: ''
+  };
 }
 
 function getPtoBalanceSummariesByEmployee_(attendance, year) {
@@ -3987,14 +4118,12 @@ function summarizeApprovedTimeOffUsage_(requests, cutoffDate) {
   return usage;
 }
 
-function getPayrollCompRowsSafe_() {
-  try {
-    const payroll = requirePayrollSpreadsheet_();
-    if (!hasSheet_(payroll, CONFIG.payrollTabs.comp)) return [];
-    return readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp));
-  } catch (error) {
-    return [];
+function getPayrollCompRows_() {
+  const payroll = requirePayrollSpreadsheet_();
+  if (!hasSheet_(payroll, CONFIG.payrollTabs.comp)) {
+    throw new Error('Payroll Compensation Master is missing. Run setupPhase1() from the Payroll spreadsheet.');
   }
+  return readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp));
 }
 
 function getCompForYear_(compRows, employeeCode, year) {
@@ -4064,7 +4193,7 @@ function getCurrentCompRow_(payroll, employeeCode, date) {
   return getCompForDate_(rows, employeeCode, date);
 }
 
-function createRetroactiveCompAdjustment_(attendance, payroll, employeeCode, oldComp, nextValues, payload) {
+function prepareRetroactiveCompAdjustment_(attendance, payroll, employeeCode, oldComp, nextValues, payload) {
   const retroStart = parseDateOrBlank_(payload.retroStart);
   const retroEnd = parseDateOrBlank_(payload.retroEnd);
   const periodId = normalizePeriodId_(payload.adjustmentPeriodId);
@@ -4083,16 +4212,19 @@ function createRetroactiveCompAdjustment_(attendance, payroll, employeeCode, old
 
   const amount = calculateRetroactiveBaseAdjustment_(attendance, employeeCode, oldBase, newBase, retroStart, retroEnd);
   if (!amount) return { amount: 0, periodId: '' };
-  appendRows_(getSheet_(payroll, CONFIG.payrollTabs.bonuses), [[
+  return {
+    amount: round2_(amount),
     periodId,
-    normalizeCode_(employeeCode),
-    amount >= 0 ? 'Positive Adj' : 'Negative Adj',
-    `Retroactive base salary change for ${displayDate_(retroStart)} to ${displayDate_(retroEnd)}.`,
-    round2_(Math.abs(amount)),
-    getActiveUserEmail_(),
-    new Date()
-  ]]);
-  return { amount: round2_(amount), periodId };
+    row: [
+      periodId,
+      normalizeCode_(employeeCode),
+      amount >= 0 ? 'Positive Adj' : 'Negative Adj',
+      `Retroactive base salary change for ${displayDate_(retroStart)} to ${displayDate_(retroEnd)}.`,
+      round2_(Math.abs(amount)),
+      getActiveUserEmail_(),
+      new Date()
+    ]
+  };
 }
 
 function calculateRetroactiveBaseAdjustment_(attendance, employeeCode, oldMonthlyBase, newMonthlyBase, startDate, endDate) {
@@ -4203,7 +4335,7 @@ function buildFinalPayrollPreview_(attendance, payroll, employeeCode, lastWorkin
   const comp = getCurrentCompRow_(payroll, code, lastDay);
   const schedules = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules));
   const monthStart = new Date(lastDay.getFullYear(), lastDay.getMonth(), 1);
-  const scheduledInMonth = countScheduledDaysInMonth_(schedules, code, monthStart);
+  const scheduledInMonth = countScheduledDaysInRateMonth_(schedules, code, lastDay);
   const eligibleDays = countScheduledDaysInRange_(schedules, code, monthStart, lastDay);
   const monthlyBenefit = comp ? toNumberOrBlank_(comp['Monthly Benefits']) : '';
   const benefitPreview = monthlyBenefit === '' || !scheduledInMonth
@@ -4311,7 +4443,7 @@ function getFinalKpiPreview_(attendance, payroll, employeeCode, lastWorkingDay, 
   const schedules = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules));
   const lastDay = dateOnly_(lastWorkingDay);
   const monthStart = new Date(lastDay.getFullYear(), lastDay.getMonth(), 1);
-  const scheduledInMonth = countScheduledDaysInMonth_(schedules, code, monthStart);
+  const scheduledInMonth = countScheduledDaysInRateMonth_(schedules, code, lastDay);
   const eligibleDays = countScheduledDaysInRange_(schedules, code, monthStart, lastDay);
   const approvedAmount = toNumberOrZero_(source.Amount);
   const proratedAmount = scheduledInMonth ? round2_(approvedAmount * (eligibleDays / scheduledInMonth)) : 0;
@@ -4327,17 +4459,17 @@ function getFinalKpiPreview_(attendance, payroll, employeeCode, lastWorkingDay, 
 
 function upsertFinalKpiBonus_(attendance, payroll, employeeCode, finalPeriod, lastWorkingDay) {
   const preview = getFinalKpiPreview_(attendance, payroll, employeeCode, lastWorkingDay, finalPeriod);
-  if (!preview.proratedAmount) return;
   const sheet = getSheet_(payroll, CONFIG.payrollTabs.bonuses);
-  replaceBonusAdjustmentRows_(sheet, finalPeriod.periodId, ['KPI'], [employeeCode], [[
-    finalPeriod.periodId,
-    normalizeCode_(employeeCode),
-    'KPI',
-    `Final payroll KPI proration from ${preview.sourcePeriodId}. ${preview.note}`,
-    round2_(preview.proratedAmount),
-    getActiveUserEmail_(),
-    new Date()
-  ]]);
+  const replacements = preview.proratedAmount ? [[
+      finalPeriod.periodId,
+      normalizeCode_(employeeCode),
+      'KPI',
+      `Final payroll KPI proration from ${preview.sourcePeriodId}. ${preview.note}`,
+      round2_(preview.proratedAmount),
+      getActiveUserEmail_(),
+      new Date()
+    ]] : [];
+  replaceBonusAdjustmentRows_(sheet, finalPeriod.periodId, ['KPI'], [employeeCode], replacements);
 }
 
 function upsertFinalPtoPayoutAdjustment_(attendance, payroll, employeeCode, finalPeriod, lastWorkingDay) {
@@ -4537,10 +4669,23 @@ function getPaidHoliday_(holidays, date, employeeCode) {
 function employeeActiveOnDate_(employee, date) {
   const status = employee.Status || 'Active';
   if (status !== 'Active' && status !== '') return false;
+  return employeeEmployedOnDate_(employee, date);
+}
+
+function employeeEmployedOnDate_(employee, date) {
   const start = parseDateOrBlank_(employee['Start Date']);
   const end = parseDateOrBlank_(employee['End Date']);
   return (!start || dateOnly_(start).getTime() <= dateOnly_(date).getTime())
     && (!end || dateOnly_(end).getTime() >= dateOnly_(date).getTime());
+}
+
+function employeeEmployedInRange_(employee, startDate, endDate) {
+  const employmentStart = parseDateOrBlank_(employee['Start Date']);
+  const employmentEnd = parseDateOrBlank_(employee['End Date']);
+  const rangeStart = dateOnly_(startDate);
+  const rangeEnd = dateOnly_(endDate);
+  return (!employmentStart || dateOnly_(employmentStart).getTime() <= rangeEnd.getTime())
+    && (!employmentEnd || dateOnly_(employmentEnd).getTime() >= rangeStart.getTime());
 }
 
 function getConfiguredIds_() {
@@ -4549,6 +4694,18 @@ function getConfiguredIds_() {
     attendanceId: props.getProperty(CONFIG.attendanceSpreadsheetIdProp),
     payrollId: props.getProperty(CONFIG.payrollSpreadsheetIdProp)
   };
+}
+
+function withScriptLock_(operationName, callback) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    throw new Error(`${operationName} is already running. Wait a moment and try again.`);
+  }
+  try {
+    return callback();
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function requireAttendanceSpreadsheet_() {
@@ -4615,12 +4772,16 @@ function mapByCode_(rows) {
 
 function listEmployeesForUi_() {
   const attendance = requireAttendanceSpreadsheet_();
-  return readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees)).map(row => ({
+  return readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees)).map(mapEmployeeRowForUi_);
+}
+
+function mapEmployeeRowForUi_(row) {
+  return {
     employeeCode: normalizeCode_(row['Employee Code']),
     displayName: row['Display Name'] || row['Full Name'] || row['Employee Code'],
     fullName: row['Full Name'] || '',
     status: row.Status || ''
-  }));
+  };
 }
 
 function getDefaultOpenPeriodId_(periods) {

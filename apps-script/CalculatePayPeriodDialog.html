@@ -258,15 +258,36 @@
           const selected = period.periodId === data.defaultPeriodId ? 'selected' : '';
           return `<option value="${escapeAttr(period.periodId)}" ${selected}>${escapeHtml(label)}</option>`;
         }).join('');
+        periodSelect.onchange = loadEmployeesForPeriod;
 
-        document.getElementById('employeeList').innerHTML = data.employees.map(employee => `
+        renderEmployees(data.employees || []);
+        setStatus('Ready.', false);
+      }
+
+      function renderEmployees(employees) {
+        document.getElementById('employeeList').innerHTML = employees.map(employee => `
           <label class="employee">
             <input type="checkbox" name="employeeCode" value="${escapeAttr(employee.employeeCode)}" checked onchange="updateSelectionCount()">
             <span>${escapeHtml(employee.displayName)}<span class="employee-code">${escapeHtml(employee.employeeCode)}</span></span>
           </label>
         `).join('');
         updateSelectionCount();
-        setStatus('Ready.', false);
+      }
+
+      function loadEmployeesForPeriod() {
+        setBusy(true);
+        setStatus('Loading employees for selected period...');
+        google.script.run
+          .withSuccessHandler(employees => {
+            renderEmployees(employees || []);
+            setStatus('Ready.', false);
+            setBusy(false);
+          })
+          .withFailureHandler(error => {
+            showError(error);
+            setBusy(false);
+          })
+          .getCalculatePayPeriodEmployees(document.getElementById('periodId').value);
       }
 
       function setAll(checked) {

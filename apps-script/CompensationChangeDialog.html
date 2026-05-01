@@ -167,7 +167,7 @@
         </div>
         <div>
           <label for="effectiveFrom">Effective From</label>
-          <input id="effectiveFrom" type="date" required>
+          <input id="effectiveFrom" type="date" onchange="loadEmployee()" required>
         </div>
         <div>
           <label for="reason">Reason</label>
@@ -255,7 +255,7 @@
             setStatus('Ready.');
           })
           .withFailureHandler(showError)
-          .getCompensationChangeEmployeeData(employeeCode);
+          .getCompensationChangeEmployeeData(employeeCode, value('effectiveFrom'));
       }
 
 	      function toggleRetro() {
