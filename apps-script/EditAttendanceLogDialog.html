@@ -2,86 +2,166 @@
 <html>
   <head>
     <base target="_top">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500&family=Inter:wght@400;500&display=swap" rel="stylesheet">
     <style>
       :root {
-        --ink: #172033;
-        --muted: #5f6b7a;
-        --line: #d8dee8;
-        --primary: #1f6feb;
-        --danger: #b42318;
+        color-scheme: light;
+        --bg-foundation: #F7F1EB;
+        --surface-card: #FBF7F1;
+        --surface-inset: #EFE8DD;
+        --ink-primary: #2A2725;
+        --ink-body: #4A4540;
+        --ink-muted: #8A8178;
+        --rule: #D4CFC4;
+        --accent: #E91D79;
+        --serif: 'Cormorant Garamond', Georgia, serif;
+        --sans: 'Inter', system-ui, -apple-system, sans-serif;
       }
       * { box-sizing: border-box; }
       body {
         margin: 0;
-        padding: 18px;
-        color: var(--ink);
-        font: 14px/1.4 Arial, sans-serif;
+        background: var(--bg-foundation);
+        color: var(--ink-body);
+        font: 14px/1.5 var(--sans);
+        -webkit-font-smoothing: antialiased;
+      }
+      form {
+        padding: 28px 28px 0;
+      }
+      h2 {
+        font-family: var(--serif);
+        font-weight: 400;
+        font-size: 22px;
+        line-height: 1.2;
+        letter-spacing: -0.01em;
+        color: var(--ink-primary);
+        margin: 0 0 4px;
+      }
+      .eyebrow,
+      label,
+      button {
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      .eyebrow {
+        color: var(--ink-muted);
+        margin: 0 0 6px;
+      }
+      .section-head {
+        margin-bottom: 18px;
+        padding-bottom: 14px;
+        border-bottom: 1px solid var(--rule);
+      }
+      .grid {
+        display: grid;
+        gap: 20px;
       }
       label {
         display: block;
-        margin: 14px 0 6px;
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 700;
+        margin-bottom: 6px;
+        color: var(--ink-muted);
       }
       select, input {
         width: 100%;
         min-height: 38px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 8px 10px;
+        border: 0;
+        border-bottom: 1px solid var(--rule);
+        border-radius: 0;
+        padding: 6px 2px;
+        background: transparent;
+        color: var(--ink-primary);
         font: inherit;
+        font-size: 15px;
+        font-variant-numeric: tabular-nums;
+        appearance: none;
+        -webkit-appearance: none;
+      }
+      select:focus, input:focus {
+        outline: none;
+        border-bottom: 2px solid var(--accent);
+        padding-bottom: 5px;
       }
       .note {
-        margin: 12px 0 0;
-        color: var(--muted);
-      }
-      .actions {
-        display: flex;
-        justify-content: flex-end;
-        gap: 10px;
-        margin-top: 18px;
-      }
-      button {
-        min-height: 38px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 0 14px;
-        background: #fff;
-        color: var(--ink);
-        font: inherit;
-        font-weight: 700;
-        cursor: pointer;
-      }
-      .primary {
-        border-color: var(--primary);
-        background: var(--primary);
-        color: #fff;
-      }
-      button:disabled {
-        opacity: 0.65;
-        cursor: not-allowed;
+        margin: 24px 0 0;
+        padding: 16px 18px;
+        background: var(--surface-inset);
+        border-top: 2px solid var(--accent);
+        color: var(--ink-body);
+        font-size: 13px;
       }
       .status {
         min-height: 22px;
-        margin-top: 12px;
-        color: var(--muted);
+        margin: 18px 0 0;
+        color: var(--ink-muted);
+        font-size: 13px;
       }
-      .error { color: var(--danger); }
+      .error { color: var(--accent); }
+      .actions {
+        position: sticky;
+        bottom: 0;
+        display: flex;
+        justify-content: flex-end;
+        gap: 12px;
+        margin: 28px -28px 0;
+        padding: 18px 28px;
+        border-top: 2px solid var(--accent);
+        background: var(--bg-foundation);
+      }
+      button {
+        min-height: 42px;
+        padding: 0 22px;
+        border: 1px solid var(--ink-primary);
+        border-radius: 0;
+        background: transparent;
+        color: var(--ink-primary);
+        font-family: var(--sans);
+        cursor: pointer;
+        transition: background-color 120ms ease, color 120ms ease;
+      }
+      button:hover:not(:disabled) {
+        background: var(--ink-primary);
+        color: var(--bg-foundation);
+      }
+      button.primary {
+        background: var(--ink-primary);
+        color: var(--bg-foundation);
+      }
+      button.primary:hover:not(:disabled) {
+        background: var(--ink-primary);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
     </style>
   </head>
   <body>
     <form onsubmit="submitForm(event)">
-      <label for="employeeCode">Employee</label>
-      <select id="employeeCode" required></select>
+      <div class="section-head">
+        <p class="eyebrow">Attendance Correction</p>
+        <h2>Edit Attendance Status</h2>
+      </div>
 
-      <label for="date">Date</label>
-      <input id="date" type="date" required>
+      <div class="grid">
+        <div>
+          <label for="employeeCode">Employee</label>
+          <select id="employeeCode" required></select>
+        </div>
+        <div>
+          <label for="date">Date</label>
+          <input id="date" type="date" required>
+        </div>
+        <div>
+          <label for="status">Status Override</label>
+          <select id="status" required></select>
+        </div>
+      </div>
 
-      <label for="status">Status Override</label>
-      <select id="status" required></select>
-
-      <p class="note">For clock time corrections, add a MANUAL Clock Event instead. This dialog is for status overrides such as PTO, UTO, Non-PTO, Holiday, or manager-confirmed absence.</p>
+      <p class="note">Use manual clock events for time corrections. Status overrides are for PTO, UTO, Non-PTO, holidays, and manager-confirmed absence states.</p>
       <p id="message" class="status">Loading...</p>
 
       <div class="actions">

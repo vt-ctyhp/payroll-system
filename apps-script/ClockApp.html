@@ -3,127 +3,211 @@
   <head>
     <base target="_top">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500&family=Inter:wght@400;500&display=swap" rel="stylesheet">
     <style>
       :root {
         color-scheme: light;
-        --bg: #f6f8fb;
-        --panel: #ffffff;
-        --ink: #172033;
-        --muted: #5f6b7a;
-        --line: #d8dee8;
-        --primary: #1f6feb;
-        --primary-dark: #1959bd;
-        --disabled: #e5e9f0;
-        --disabled-ink: #7b8492;
-        --danger: #b42318;
-        --ok: #0f7b3f;
+        --bg-foundation: #F7F1EB;
+        --surface-card: #FBF7F1;
+        --surface-inset: #EFE8DD;
+        --ink-primary: #2A2725;
+        --ink-body: #4A4540;
+        --ink-muted: #8A8178;
+        --rule: #D4CFC4;
+        --accent: #E91D79;
+        --serif: 'Cormorant Garamond', Georgia, serif;
+        --sans: 'Inter', system-ui, -apple-system, sans-serif;
       }
       * { box-sizing: border-box; }
       body {
         margin: 0;
         min-height: 100vh;
-        background: var(--bg);
-        color: var(--ink);
-        font: 16px/1.45 Arial, sans-serif;
+        background: var(--bg-foundation);
+        color: var(--ink-body);
+        font: 15px/1.55 var(--sans);
+        -webkit-font-smoothing: antialiased;
       }
       main {
         width: min(460px, 100%);
         min-height: 100vh;
         margin: 0 auto;
-        padding: 28px 18px;
+        padding: 32px 20px 48px;
       }
       .panel {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 22px;
-        box-shadow: 0 10px 28px rgba(31, 50, 81, 0.08);
+        background: var(--surface-card);
+        border: 1px solid var(--rule);
+        padding: 36px 32px;
+      }
+
+      /* Masthead */
+      .eyebrow {
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--ink-muted);
+        margin: 0;
       }
       h1 {
-        margin: 0;
-        font-size: 26px;
-        letter-spacing: 0;
+        font-family: var(--serif);
+        font-weight: 400;
+        font-size: 34px;
+        line-height: 1.1;
+        letter-spacing: -0.01em;
+        color: var(--ink-primary);
+        margin: 6px 0 0;
       }
-      .date, .muted {
-        color: var(--muted);
+      .date {
+        margin-top: 18px;
       }
       .time {
-        margin-top: 2px;
-        font-size: 32px;
-        font-weight: 700;
+        font-family: var(--serif);
+        font-weight: 400;
+        font-size: 56px;
+        line-height: 1;
+        letter-spacing: -0.02em;
+        color: var(--ink-primary);
+        font-variant-numeric: tabular-nums;
+        margin: 4px 0 0;
       }
+
+      /* Divider */
+      .rule {
+        border: 0;
+        border-top: 1px solid var(--rule);
+        margin: 28px 0;
+      }
+
+      /* Current state callout */
       .state {
-        margin: 18px 0;
-        padding: 10px 12px;
-        border: 1px solid #b8ddc6;
-        border-radius: 6px;
-        color: var(--ok);
-        background: #f1fbf5;
-        font-weight: 700;
+        background: var(--surface-inset);
+        padding: 14px 18px;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--ink-primary);
       }
+
+      /* Buttons */
       .buttons {
         display: grid;
         gap: 10px;
-        margin: 18px 0;
+        margin: 24px 0 0;
       }
       button {
         width: 100%;
-        min-height: 50px;
+        min-height: 52px;
+        padding: 0 20px;
         border: 0;
-        border-radius: 6px;
-        background: var(--primary);
-        color: #fff;
+        background: var(--ink-primary);
+        color: var(--bg-foundation);
         font: inherit;
-        font-weight: 700;
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
         cursor: pointer;
+        transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
       }
-      button:hover:not(:disabled) { background: var(--primary-dark); }
+      button:hover:not(:disabled) {
+        background: var(--ink-primary);
+      }
       button:disabled {
         cursor: not-allowed;
-        background: var(--disabled);
-        color: var(--disabled-ink);
+        background: var(--surface-inset);
+        color: var(--ink-muted);
       }
       .secondary {
         background: transparent;
-        color: var(--primary);
-        border: 1px solid var(--line);
-        min-height: 42px;
+        color: var(--ink-primary);
+        border: 1px solid var(--ink-primary);
+        min-height: 44px;
+        margin-top: 28px;
       }
       .secondary:hover:not(:disabled) {
-        background: #eef5ff;
-        color: var(--primary-dark);
+        background: var(--ink-primary);
+        color: var(--bg-foundation);
+      }
+
+      /* Today summary */
+      .summary-heading {
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--ink-muted);
+        margin: 0 0 12px;
       }
       .summary {
-        margin: 18px 0 0;
+        margin: 0;
         padding: 0;
         list-style: none;
+        font-variant-numeric: tabular-nums;
       }
       .summary li {
-        padding: 8px 0;
-        border-top: 1px solid var(--line);
+        padding: 14px 0;
+        border-top: 1px solid var(--rule);
+        color: var(--ink-body);
+        font-size: 14px;
       }
+      .summary li:last-child {
+        border-bottom: 1px solid var(--rule);
+      }
+
+      /* Form */
       label {
         display: block;
-        margin: 14px 0 6px;
-        color: var(--muted);
-        font-size: 13px;
-        font-weight: 700;
+        margin: 24px 0 8px;
+        color: var(--ink-muted);
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.14em;
         text-transform: uppercase;
       }
       input {
         width: 100%;
         height: 44px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 0 12px;
+        border: 0;
+        border-bottom: 1px solid var(--rule);
+        background: transparent;
+        padding: 0 2px;
         font: inherit;
+        font-size: 16px;
+        color: var(--ink-primary);
+        transition: border-color 120ms ease;
       }
+      input:focus {
+        outline: none;
+        border-bottom: 2px solid var(--ink-primary);
+        padding-bottom: 0;
+      }
+
+      /* Status / loading */
       .status {
         min-height: 22px;
-        margin-top: 12px;
-        color: var(--muted);
+        margin-top: 18px;
+        color: var(--ink-muted);
+        font-size: 13px;
       }
-      .error { color: var(--danger); }
+      .error { color: var(--accent); }
+      .loading {
+        background: var(--surface-inset);
+        padding: 18px 20px;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--ink-muted);
+        text-align: center;
+      }
+      .intro {
+        color: var(--ink-body);
+        font-size: 15px;
+        margin: 14px 0 0;
+      }
       .hidden { display: none; }
     </style>
   </head>
@@ -131,7 +215,7 @@
     <main>
       <section class="panel">
         <div id="app">
-          <p class="muted">Loading clock state...</p>
+          <p class="loading">Loading clock state</p>
         </div>
       </section>
     </main>
@@ -177,12 +261,15 @@
         const summary = state.todaySummary.map(item => `<li>${escapeHtml(item)}</li>`).join('');
 
         document.getElementById('app').innerHTML = `
+          <p class="eyebrow">Time &amp; Attendance</p>
           <h1>Hi, ${escapeHtml(state.employee.displayName)}</h1>
-          <div class="date">${escapeHtml(state.dateLabel)}</div>
+          <p class="eyebrow date">${escapeHtml(state.dateLabel)}</p>
           <div class="time">${escapeHtml(state.timeLabel)}</div>
+          <hr class="rule">
           <div class="state">${escapeHtml(state.currentState)}</div>
           <div class="buttons">${buttons}</div>
-          <h2 class="muted" style="font-size:16px;margin:22px 0 8px;">Today so far</h2>
+          <hr class="rule">
+          <p class="summary-heading">Today so far</p>
           <ul class="summary">${summary}</ul>
           <p id="status" class="status"></p>
           <button type="button" class="secondary" onclick="signOut()">Sign out</button>
@@ -191,8 +278,9 @@
 
       function renderIdentityForm(state) {
         document.getElementById('app').innerHTML = `
+          <p class="eyebrow">Time &amp; Attendance</p>
           <h1>Employee Clock-In</h1>
-          <p class="muted">${escapeHtml(state.message || 'Enter your employee code and PIN.')}</p>
+          <p class="intro">${escapeHtml(state.message || 'Enter your employee code and PIN to continue.')}</p>
           <label for="employeeCode">Employee Code</label>
           <input id="employeeCode" autocomplete="username" inputmode="text">
           <label for="pin">Web App PIN</label>

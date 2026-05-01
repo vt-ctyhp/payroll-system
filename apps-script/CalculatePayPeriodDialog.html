@@ -2,107 +2,240 @@
 <html>
   <head>
     <base target="_top">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500&family=Inter:wght@400;500&display=swap" rel="stylesheet">
     <style>
       :root {
-        --ink: #172033;
-        --muted: #5f6b7a;
-        --line: #d8dee8;
-        --primary: #1f6feb;
-        --danger: #b42318;
-        --panel: #f7f9fc;
+        color-scheme: light;
+        --bg-foundation: #F7F1EB;
+        --surface-card: #FBF7F1;
+        --surface-inset: #EFE8DD;
+        --ink-primary: #2A2725;
+        --ink-body: #4A4540;
+        --ink-muted: #8A8178;
+        --rule: #D4CFC4;
+        --accent: #E91D79;
+        --serif: 'Cormorant Garamond', Georgia, serif;
+        --sans: 'Inter', system-ui, -apple-system, sans-serif;
       }
       * { box-sizing: border-box; }
       body {
         margin: 0;
-        padding: 18px;
-        color: var(--ink);
-        font: 14px/1.4 Arial, sans-serif;
+        background: var(--bg-foundation);
+        color: var(--ink-body);
+        font: 14px/1.5 var(--sans);
+        -webkit-font-smoothing: antialiased;
+      }
+      form {
+        padding: 28px 28px 0;
+      }
+      h2 {
+        font-family: var(--serif);
+        font-weight: 400;
+        font-size: 22px;
+        line-height: 1.2;
+        letter-spacing: -0.01em;
+        color: var(--ink-primary);
+        margin: 0 0 4px;
+      }
+      .eyebrow,
+      label,
+      .selection-count,
+      button {
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      .eyebrow {
+        color: var(--ink-muted);
+        margin: 0 0 6px;
+      }
+      .section {
+        margin-top: 32px;
+      }
+      .section:first-of-type {
+        margin-top: 0;
+      }
+      .section-head {
+        margin-bottom: 18px;
+        padding-bottom: 14px;
+        border-bottom: 1px solid var(--rule);
       }
       label {
         display: block;
-        margin: 14px 0 6px;
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 700;
+        margin-bottom: 6px;
+        color: var(--ink-muted);
       }
       select {
         width: 100%;
-        min-height: 38px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 8px 10px;
+        min-height: 40px;
+        border: 0;
+        border-bottom: 1px solid var(--rule);
+        border-radius: 0;
+        padding: 6px 2px;
+        background: transparent;
+        color: var(--ink-primary);
         font: inherit;
+        font-size: 15px;
+        font-variant-numeric: tabular-nums;
+        appearance: none;
+        -webkit-appearance: none;
       }
-      .employee-list {
-        max-height: 280px;
-        overflow: auto;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--panel);
+      select:focus {
+        outline: none;
+        border-bottom: 2px solid var(--accent);
+        padding-bottom: 5px;
       }
-      .employee {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        min-height: 38px;
-        padding: 8px 10px;
-        border-bottom: 1px solid var(--line);
-      }
-      .employee:last-child { border-bottom: 0; }
-      .employee input { margin: 0; }
       .tools {
         display: flex;
-        gap: 8px;
-        margin: 8px 0;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 14px;
       }
-      .actions {
+      .selection-count {
+        color: var(--ink-muted);
+      }
+      .button-row {
         display: flex;
-        justify-content: flex-end;
-        gap: 10px;
-        margin-top: 18px;
+        flex: 0 0 auto;
+        gap: 12px;
       }
-      button {
-        min-height: 38px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 0 14px;
-        background: #fff;
-        color: var(--ink);
-        font: inherit;
-        font-weight: 700;
+      .employee-list {
+        max-height: 282px;
+        overflow: auto;
+        border-top: 1px solid var(--rule);
+        border-bottom: 1px solid var(--rule);
+      }
+      .employee {
+        display: grid;
+        grid-template-columns: 24px minmax(0, 1fr);
+        align-items: center;
+        gap: 10px;
+        min-height: 44px;
+        margin: 0;
+        padding: 12px 0;
+        border-bottom: 1px solid var(--rule);
+        color: var(--ink-body);
+      }
+      .employee:last-child {
+        border-bottom: 0;
+      }
+      .employee input {
+        width: 16px;
+        height: 16px;
+        margin: 0;
+        accent-color: var(--accent);
         cursor: pointer;
       }
-      .primary {
-        border-color: var(--primary);
-        background: var(--primary);
-        color: #fff;
+      .employee input:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
       }
-      button:disabled {
-        opacity: 0.65;
-        cursor: not-allowed;
+      .employee-code {
+        margin-left: 8px;
+        color: var(--ink-muted);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .result {
+        margin-top: 30px;
+        padding: 18px 20px;
+        background: var(--surface-inset);
+        border-top: 2px solid var(--accent);
       }
       .status {
         min-height: 22px;
-        margin-top: 12px;
-        color: var(--muted);
+        margin: 0;
+        color: var(--ink-muted);
+        font-size: 13px;
         white-space: pre-wrap;
       }
-      .error { color: var(--danger); }
+      .result-title {
+        margin: 0 0 8px;
+        color: var(--ink-primary);
+        font-family: var(--serif);
+        font-size: 20px;
+        font-weight: 400;
+        line-height: 1.15;
+      }
+      .warning-list {
+        margin: 10px 0 0;
+        padding-left: 18px;
+        color: var(--ink-body);
+      }
+      .actions {
+        position: sticky;
+        bottom: 0;
+        display: flex;
+        justify-content: flex-end;
+        gap: 12px;
+        margin: 28px -28px 0;
+        padding: 18px 28px;
+        border-top: 2px solid var(--accent);
+        background: var(--bg-foundation);
+      }
+      button {
+        min-height: 42px;
+        padding: 0 22px;
+        border: 1px solid var(--ink-primary);
+        border-radius: 0;
+        background: transparent;
+        color: var(--ink-primary);
+        font-family: var(--sans);
+        cursor: pointer;
+        transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+      }
+      button:hover:not(:disabled) {
+        background: var(--ink-primary);
+        color: var(--bg-foundation);
+      }
+      button.primary {
+        background: var(--ink-primary);
+        color: var(--bg-foundation);
+      }
+      button.primary:hover:not(:disabled) {
+        background: var(--ink-primary);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
     </style>
   </head>
   <body>
     <form onsubmit="submitForm(event)">
-      <label for="periodId">Pay Period</label>
-      <select id="periodId" required></select>
-
-      <label>Employees</label>
-      <div class="tools">
-        <button type="button" onclick="setAll(true)">Select All</button>
-        <button type="button" onclick="setAll(false)">Clear</button>
+      <div class="section">
+        <div class="section-head">
+          <p class="eyebrow">Payroll Run</p>
+          <h2>Calculate Pay Period</h2>
+        </div>
+        <label for="periodId">Pay Period</label>
+        <select id="periodId" required></select>
       </div>
-      <div id="employeeList" class="employee-list">Loading...</div>
 
-      <p id="status" class="status"></p>
+      <div class="section">
+        <div class="section-head">
+          <p class="eyebrow">Included Records</p>
+          <h2>Employees</h2>
+        </div>
+        <div class="tools">
+          <span id="selectionCount" class="selection-count"></span>
+          <div class="button-row">
+            <button type="button" onclick="setAll(true)">Select All</button>
+            <button type="button" onclick="setAll(false)">Clear</button>
+          </div>
+        </div>
+        <div id="employeeList" class="employee-list">Loading...</div>
+      </div>
+
+      <div id="result" class="result">
+        <div id="status" class="status">Ready.</div>
+      </div>
 
       <div class="actions">
         <button type="button" onclick="google.script.host.close()">Cancel</button>
@@ -128,17 +261,25 @@
 
         document.getElementById('employeeList').innerHTML = data.employees.map(employee => `
           <label class="employee">
-            <input type="checkbox" name="employeeCode" value="${escapeAttr(employee.employeeCode)}" checked>
-            <span>${escapeHtml(employee.displayName)} (${escapeHtml(employee.employeeCode)})</span>
+            <input type="checkbox" name="employeeCode" value="${escapeAttr(employee.employeeCode)}" checked onchange="updateSelectionCount()">
+            <span>${escapeHtml(employee.displayName)}<span class="employee-code">${escapeHtml(employee.employeeCode)}</span></span>
           </label>
         `).join('');
-        setStatus('');
+        updateSelectionCount();
+        setStatus('Ready.', false);
       }
 
       function setAll(checked) {
         document.querySelectorAll('input[name="employeeCode"]').forEach(input => {
           input.checked = checked;
         });
+        updateSelectionCount();
+      }
+
+      function updateSelectionCount() {
+        const selected = document.querySelectorAll('input[name="employeeCode"]:checked').length;
+        const total = document.querySelectorAll('input[name="employeeCode"]').length;
+        document.getElementById('selectionCount').textContent = `${selected} of ${total} selected`;
       }
 
       function submitForm(event) {
@@ -153,10 +294,15 @@
         google.script.run
           .withSuccessHandler(result => {
             const warnings = (result.warnings || []).filter(Boolean);
-            const message = [result.message || 'Calculation complete.']
-              .concat(warnings.length ? ['Warnings:', warnings.join('\n')] : [])
-              .join('\n');
-            setStatus(message, false);
+            if (warnings.length) {
+              setResult(
+                result.message || 'Calculation complete.',
+                warnings.map(warning => `<li>${escapeHtml(warning)}</li>`).join('')
+              );
+            } else {
+              setResult(result.message || 'Calculation complete.', '');
+            }
+            setBusy(false);
           })
           .withFailureHandler(error => {
             showError(error);
@@ -176,6 +322,13 @@
         const node = document.getElementById('status');
         node.textContent = message || '';
         node.className = isError ? 'status error' : 'status';
+      }
+
+      function setResult(message, detailsHtml) {
+        document.getElementById('status').innerHTML = `
+          <p class="result-title">${escapeHtml(message)}</p>
+          ${detailsHtml ? `<ul class="warning-list">${detailsHtml}</ul>` : ''}
+        `;
       }
 
       function showError(error) {

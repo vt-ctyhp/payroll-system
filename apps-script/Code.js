@@ -39,6 +39,19 @@ const CONFIG = {
   }
 };
 
+const UI_THEME = {
+  foundation: '#F7F1EB',
+  card: '#FBF7F1',
+  inset: '#EFE8DD',
+  ink: '#2A2725',
+  body: '#4A4540',
+  muted: '#8A8178',
+  rule: '#D4CFC4',
+  accent: '#E91D79',
+  serif: 'Cormorant Garamond',
+  sans: 'Inter'
+};
+
 const HEADERS = {
   employees: [
     'Employee Code',
@@ -340,22 +353,22 @@ function showAddEmployeeDialog() {
   const config = getConfiguredIds_();
   const template = HtmlService.createTemplateFromFile('AddEmployeeDialog');
   template.includeComp = Boolean(active && active.getId() === config.payrollId);
-  const html = template.evaluate().setWidth(780).setHeight(720);
+  const html = template.evaluate().setWidth(820).setHeight(740);
   SpreadsheetApp.getUi().showModalDialog(html, 'Add New Employee');
 }
 
 function showAddClockEventDialog() {
-  const html = HtmlService.createHtmlOutputFromFile('AddClockEventDialog').setWidth(520).setHeight(540);
+  const html = HtmlService.createHtmlOutputFromFile('AddClockEventDialog').setWidth(540).setHeight(560);
   SpreadsheetApp.getUi().showModalDialog(html, 'Add Clock Event Manually');
 }
 
 function showEditAttendanceLogDialog() {
-  const html = HtmlService.createHtmlOutputFromFile('EditAttendanceLogDialog').setWidth(520).setHeight(460);
+  const html = HtmlService.createHtmlOutputFromFile('EditAttendanceLogDialog').setWidth(540).setHeight(500);
   SpreadsheetApp.getUi().showModalDialog(html, 'Edit Attendance Log Entry');
 }
 
 function showCalculatePayPeriodDialog() {
-  const html = HtmlService.createHtmlOutputFromFile('CalculatePayPeriodDialog').setWidth(680).setHeight(620);
+  const html = HtmlService.createHtmlOutputFromFile('CalculatePayPeriodDialog').setWidth(700).setHeight(640);
   SpreadsheetApp.getUi().showModalDialog(html, 'Calculate Pay Period');
 }
 
@@ -968,13 +981,41 @@ function blankPayrollResult_(period, employeeCode, employeeName, status, note) {
 }
 
 function setupSheetFormatting_(sheet, headerCount) {
+  const maxRows = sheet.getMaxRows();
   sheet.setFrozenRows(1);
+  try {
+    sheet.setHiddenGridlines(true);
+  } catch (error) {
+    // Bound spreadsheet UI may omit this surface in some Apps Script contexts.
+  }
+
+  sheet.getRange(1, 1, maxRows, headerCount)
+    .setBackground(UI_THEME.card)
+    .setFontFamily(UI_THEME.sans)
+    .setFontColor(UI_THEME.body)
+    .setVerticalAlignment('middle');
+
   sheet.getRange(1, 1, 1, headerCount)
     .setFontWeight('bold')
-    .setBackground('#1f4e78')
-    .setFontColor('#ffffff')
-    .setWrap(true);
+    .setFontFamily(UI_THEME.serif)
+    .setFontSize(12)
+    .setBackground(UI_THEME.ink)
+    .setFontColor(UI_THEME.card)
+    .setHorizontalAlignment('left')
+    .setVerticalAlignment('middle')
+    .setWrap(true)
+    .setBorder(true, true, true, true, true, true, UI_THEME.ink, SpreadsheetApp.BorderStyle.SOLID);
+
+  if (maxRows > 1) {
+    sheet.getRange(2, 1, maxRows - 1, headerCount)
+      .setFontSize(10)
+      .setBorder(true, true, true, true, true, true, UI_THEME.rule, SpreadsheetApp.BorderStyle.SOLID);
+  }
+
+  sheet.setRowHeight(1, 42);
+  applySheetFilter_(sheet, headerCount);
   sheet.autoResizeColumns(1, headerCount);
+  capColumnWidths_(sheet, headerCount);
 }
 
 function applyAttendanceFormatting_(ss) {
@@ -994,6 +1035,7 @@ function applyAttendanceFormatting_(ss) {
   getSheet_(ss, CONFIG.attendanceTabs.log).getRange('A:A').setNumberFormat('yyyy-mm-dd');
   getSheet_(ss, CONFIG.attendanceTabs.log).getRange('D:M').setNumberFormat('h:mm AM/PM');
   getSheet_(ss, CONFIG.attendanceTabs.log).getRange('N:O').setNumberFormat('0.00');
+  applySpreadsheetChrome_(ss, 'attendance');
 }
 
 function applyPayrollFormatting_(ss) {
@@ -1015,6 +1057,47 @@ function applyPayrollFormatting_(ss) {
   getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('Q:T').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.output).getRange('C:J').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.lifecycle).getRange('D:E').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
+  applySpreadsheetChrome_(ss, 'payroll');
+}
+
+function applySpreadsheetChrome_(ss, workbookType) {
+  const tabColor = workbookType === 'payroll' ? UI_THEME.ink : UI_THEME.accent;
+  ss.getSheets().forEach(sheet => {
+    sheet.setTabColor(tabColor);
+    const lastColumn = Math.max(sheet.getLastColumn(), 1);
+    const lastRow = Math.max(sheet.getLastRow(), 1);
+    sheet.getRange(1, 1, lastRow, lastColumn)
+      .setFontFamily(UI_THEME.sans)
+      .setFontColor(UI_THEME.body);
+    sheet.getRange(1, 1, 1, lastColumn)
+      .setFontFamily(UI_THEME.serif)
+      .setFontColor(UI_THEME.card)
+      .setBackground(UI_THEME.ink);
+    if (lastRow > 1) {
+      sheet.getRange(2, 1, lastRow - 1, lastColumn)
+        .setBackground(UI_THEME.card)
+        .setBorder(true, true, true, true, true, true, UI_THEME.rule, SpreadsheetApp.BorderStyle.SOLID);
+    }
+  });
+}
+
+function applySheetFilter_(sheet, headerCount) {
+  const range = sheet.getRange(1, 1, Math.max(sheet.getMaxRows(), 2), headerCount);
+  try {
+    const existing = sheet.getFilter();
+    if (existing) existing.remove();
+    range.createFilter();
+  } catch (error) {
+    // Filters are UX-only; skip if the current sheet state blocks creation.
+  }
+}
+
+function capColumnWidths_(sheet, headerCount) {
+  for (let column = 1; column <= headerCount; column += 1) {
+    const width = sheet.getColumnWidth(column);
+    if (width < 96) sheet.setColumnWidth(column, 96);
+    if (width > 240) sheet.setColumnWidth(column, 240);
+  }
 }
 
 function setValidation_(sheet, column, values) {
