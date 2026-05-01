@@ -36,7 +36,8 @@ const CONFIG = {
     calculations: 'Payroll Calculations',
     output: 'Payroll Output',
     lifecycle: 'Employee Lifecycle Log'
-  }
+  },
+  workflowInstructionsTab: '0. Workflow Instructions'
 };
 
 const UI_THEME = {
@@ -50,6 +51,21 @@ const UI_THEME = {
   accent: '#E91D79',
   serif: 'Cormorant Garamond',
   sans: 'Inter'
+};
+
+const PHASE1_TEST = {
+  marker: 'PHASE1_TEST_DATA',
+  periodId: 'TEST-2026-04-EOM',
+  payDate: new Date(2026, 3, 30),
+  periodStart: new Date(2026, 3, 1),
+  periodEnd: new Date(2026, 3, 15),
+  employeeCodes: ['MARK', 'PAUL', 'ANDREA', 'CHARISSE'],
+  pins: {
+    MARK: '1001',
+    PAUL: '1002',
+    ANDREA: '1003',
+    CHARISSE: '1004'
+  }
 };
 
 const HEADERS = {
@@ -282,6 +298,66 @@ function configurePhase1SpreadsheetIds(attendanceSpreadsheetId, payrollSpreadshe
   return result;
 }
 
+function createWorkflowInstructionsTabs() {
+  const attendance = requireAttendanceSpreadsheet_();
+  const payroll = requirePayrollSpreadsheet_();
+
+  setupAttendanceSpreadsheet_(attendance);
+  setupPayrollSpreadsheet_(payroll);
+  buildWorkflowInstructionsSheet_(attendance, 'attendance');
+  buildWorkflowInstructionsSheet_(payroll, 'payroll');
+
+  const result = {
+    attendanceSpreadsheetUrl: attendance.getUrl(),
+    payrollSpreadsheetUrl: payroll.getUrl(),
+    message: 'Workflow Instructions tabs created in both Phase 1 workbooks.'
+  };
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+function injectPhase1TestData() {
+  const attendance = requireAttendanceSpreadsheet_();
+  const payroll = requirePayrollSpreadsheet_();
+
+  setupAttendanceSpreadsheet_(attendance);
+  setupPayrollSpreadsheet_(payroll);
+  seedInitialEmployees_();
+  ensurePhase1TestPins_(attendance);
+  ensurePhase1TestPayPeriod_(payroll);
+
+  const eventSheet = getSheet_(attendance, CONFIG.attendanceTabs.events);
+  const rowsRemoved = removePhase1TestClockEvents_(eventSheet);
+  const eventRows = buildPhase1TestClockEventRows_(attendance);
+  appendRows_(eventSheet, eventRows);
+  eventSheet.getRange('B:B').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
+
+  const attendanceResult = rebuildAttendanceLog({
+    startDate: formatDateKey_(PHASE1_TEST.periodStart),
+    endDate: formatDateKey_(PHASE1_TEST.periodEnd)
+  });
+  const payrollResult = calculatePayPeriod({
+    periodId: PHASE1_TEST.periodId,
+    employeeCodes: PHASE1_TEST.employeeCodes
+  });
+
+  const result = {
+    periodId: PHASE1_TEST.periodId,
+    dateRange: `${formatDateKey_(PHASE1_TEST.periodStart)} through ${formatDateKey_(PHASE1_TEST.periodEnd)}`,
+    employees: PHASE1_TEST.employeeCodes,
+    rowsRemoved,
+    eventsAdded: eventRows.length,
+    attendanceRowsWritten: attendanceResult.rowsWritten,
+    payrollMessage: payrollResult.message,
+    payrollWarnings: payrollResult.warnings,
+    attendanceSpreadsheetUrl: attendance.getUrl(),
+    payrollSpreadsheetUrl: payroll.getUrl(),
+    message: `Injected Phase 1 test data for ${PHASE1_TEST.periodId}.`
+  };
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
 function onOpen(e) {
   handleSpreadsheetOpen(e);
 }
@@ -308,6 +384,8 @@ function addAttendanceMenu_() {
   SpreadsheetApp.getUi()
     .createMenu('Attendance')
     .addItem('Open Clock-In Web App URL', 'showClockAppUrl')
+    .addItem('Create Workflow Instructions Tabs', 'createWorkflowInstructionsTabsFromMenu')
+    .addItem('Inject Phase 1 Test Data', 'injectPhase1TestDataFromMenu')
     .addSeparator()
     .addItem('Add Clock Event Manually...', 'showAddClockEventDialog')
     .addItem('Edit Attendance Log Entry...', 'showEditAttendanceLogDialog')
@@ -322,6 +400,9 @@ function addAttendanceMenu_() {
 function addPayrollMenu_() {
   SpreadsheetApp.getUi()
     .createMenu('Payroll')
+    .addItem('Create Workflow Instructions Tabs', 'createWorkflowInstructionsTabsFromMenu')
+    .addItem('Inject Phase 1 Test Data', 'injectPhase1TestDataFromMenu')
+    .addSeparator()
     .addItem('Calculate Pay Period...', 'showCalculatePayPeriodDialog')
     .addItem('Refresh Attendance Data', 'refreshAttendanceDataFromMenu')
     .addItem('Finalize & Mark as Paid', 'markSelectedPayPeriodPaidFromMenu')
@@ -344,6 +425,23 @@ function showAboutHelp() {
   SpreadsheetApp.getUi().alert(
     'Payroll & Attendance Phase 1',
     'Phase 1 includes self-service clock events, attendance log rebuilding, basic employee onboarding, and base payroll calculations with late/absence deductions. Compensation values left blank in the PRD remain blank in Compensation Master.',
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+function createWorkflowInstructionsTabsFromMenu() {
+  const result = createWorkflowInstructionsTabs();
+  SpreadsheetApp.getUi().alert('Workflow Instructions', result.message, SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+function injectPhase1TestDataFromMenu() {
+  const result = injectPhase1TestData();
+  const warningText = result.payrollWarnings.length
+    ? `\n\nWarnings:\n${result.payrollWarnings.join('\n')}`
+    : '';
+  SpreadsheetApp.getUi().alert(
+    'Phase 1 Test Data',
+    `${result.eventsAdded} clock events added for ${result.periodId}. ${result.attendanceRowsWritten} attendance rows rebuilt.${warningText}`,
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
@@ -799,6 +897,462 @@ function seedInitialEmployees_() {
   applyPayrollFormatting_(payroll);
 }
 
+function ensurePhase1TestPins_(attendance) {
+  const sheet = getSheet_(attendance, CONFIG.attendanceTabs.employees);
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return 0;
+  const headers = values[0];
+  const codeIdx = headers.indexOf('Employee Code');
+  const pinIdx = headers.indexOf('Web App PIN');
+  if (codeIdx === -1 || pinIdx === -1) return 0;
+
+  let pinsAdded = 0;
+  for (let row = 1; row < values.length; row += 1) {
+    const code = normalizeCode_(values[row][codeIdx]);
+    if (!PHASE1_TEST.pins[code] || values[row][pinIdx]) continue;
+    sheet.getRange(row + 1, pinIdx + 1).setValue(PHASE1_TEST.pins[code]);
+    pinsAdded += 1;
+  }
+  return pinsAdded;
+}
+
+function ensurePhase1TestPayPeriod_(payroll) {
+  const sheet = getSheet_(payroll, CONFIG.payrollTabs.periods);
+  const row = [
+    PHASE1_TEST.periodId,
+    PHASE1_TEST.payDate,
+    PHASE1_TEST.periodStart,
+    PHASE1_TEST.periodEnd,
+    'EOM',
+    'Open'
+  ];
+  const existing = readObjects_(sheet).filter(period => period['Period ID'] === PHASE1_TEST.periodId)[0];
+  if (existing) {
+    sheet.getRange(existing._rowNumber, 1, 1, row.length).setValues([row]);
+  } else {
+    sheet.appendRow(row);
+  }
+  sheet.getRange('B:D').setNumberFormat('yyyy-mm-dd');
+}
+
+function removePhase1TestClockEvents_(sheet) {
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return 0;
+  const headers = values[0];
+  const eventIdIdx = headers.indexOf('Event ID');
+  const notesIdx = headers.indexOf('Notes');
+  let removed = 0;
+
+  for (let row = values.length - 1; row >= 1; row -= 1) {
+    const eventId = eventIdIdx === -1 ? '' : String(values[row][eventIdIdx] || '');
+    const notes = notesIdx === -1 ? '' : String(values[row][notesIdx] || '');
+    if (eventId.indexOf('TEST-PHASE1-') === 0 || notes.indexOf(PHASE1_TEST.marker) !== -1) {
+      sheet.deleteRow(row + 1);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+function buildPhase1TestClockEventRows_(attendance) {
+  const employees = mapByCode_(readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees)));
+  const schedules = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules));
+  const scenarios = getPhase1TestScenarios_();
+  const rows = [];
+
+  for (
+    let cursor = dateOnly_(PHASE1_TEST.periodStart);
+    cursor.getTime() <= dateOnly_(PHASE1_TEST.periodEnd).getTime();
+    cursor = addDays_(cursor, 1)
+  ) {
+    const dateKey = formatDateKey_(cursor);
+    PHASE1_TEST.employeeCodes.forEach(code => {
+      if (!employees[code]) return;
+      const schedule = getScheduleForDate_(schedules, code, cursor);
+      const daySchedule = getDaySchedule_(schedule, cursor);
+      if (!daySchedule.isScheduled) return;
+
+      const scenario = scenarios[`${dateKey}|${code}`] || {};
+      if (scenario.absent) return;
+
+      const clockInHour = scenario.clockIn === undefined ? daySchedule.start - (2 / 60) : scenario.clockIn;
+      rows.push(createPhase1TestEventRow_(cursor, code, 'CLOCK_IN', clockInHour, scenario.note || 'Scheduled workday.'));
+
+      if (daySchedule.lunchStart !== '' && daySchedule.lunchEnd !== '') {
+        const lunchEndHour = scenario.lunchEnd === undefined ? daySchedule.lunchEnd : scenario.lunchEnd;
+        rows.push(createPhase1TestEventRow_(cursor, code, 'LUNCH_START', daySchedule.lunchStart, scenario.note || 'Scheduled lunch.'));
+        rows.push(createPhase1TestEventRow_(cursor, code, 'LUNCH_END', lunchEndHour, scenario.note || 'Scheduled lunch.'));
+      }
+
+      if (!scenario.omitClockOut) {
+        const clockOutHour = scenario.clockOut === undefined ? daySchedule.end + (2 / 60) : scenario.clockOut;
+        rows.push(createPhase1TestEventRow_(cursor, code, 'CLOCK_OUT', clockOutHour, scenario.note || 'Scheduled workday.'));
+      }
+    });
+  }
+
+  return rows.sort((a, b) => a[1].getTime() - b[1].getTime());
+}
+
+function getPhase1TestScenarios_() {
+  return {
+    '2026-04-08|MARK': {
+      clockIn: 10.25,
+      lunchEnd: 14 + (10 / 60),
+      note: 'Late arrival and late lunch return.'
+    },
+    '2026-04-04|PAUL': {
+      absent: true,
+      note: 'Scheduled day with no clock events.'
+    },
+    '2026-04-10|ANDREA': {
+      clockOut: 17.5,
+      note: 'Short day for payroll deduction review.'
+    },
+    '2026-04-14|CHARISSE': {
+      omitClockOut: true,
+      note: 'Missing clock-out for incomplete attendance review.'
+    }
+  };
+}
+
+function createPhase1TestEventRow_(date, employeeCode, eventType, decimalHour, note) {
+  const dateToken = formatDateKey_(date).replace(/-/g, '');
+  return [
+    `TEST-PHASE1-${employeeCode}-${dateToken}-${eventType}`,
+    makeDateAtHour_(date, decimalHour),
+    employeeCode,
+    eventType,
+    'IMPORTED',
+    'Phase 1 test data',
+    `${PHASE1_TEST.marker}: ${note}`
+  ];
+}
+
+function buildWorkflowInstructionsSheet_(ss, workbookType) {
+  let sheet = ss.getSheetByName(CONFIG.workflowInstructionsTab);
+  if (!sheet) sheet = ss.insertSheet(CONFIG.workflowInstructionsTab, 0);
+
+  prepareWorkflowInstructionsSheet_(ss, sheet, workbookType);
+  const guide = workbookType === 'payroll' ? getPayrollWorkflowGuide_() : getAttendanceWorkflowGuide_();
+  let row = 1;
+
+  sheet.getRange(row, 1, 1, 6).merge().setValue(guide.eyebrow);
+  row += 1;
+  sheet.getRange(row, 1, 1, 6).merge().setValue(guide.title);
+  row += 1;
+  sheet.getRange(row, 1, 1, 6).merge().setValue(guide.subtitle);
+  row += 2;
+
+  const metaRows = [
+    ['Workbook', guide.workbook, 'Primary owner', guide.owner, 'Best entry point', guide.entryPoint],
+    ['Before you begin', guide.beforeUse, 'Cadence', guide.cadence, 'Phase 1 scope', guide.scope]
+  ];
+  sheet.getRange(row, 1, metaRows.length, 6).setValues(metaRows);
+  row += metaRows.length + 2;
+
+  guide.sections.forEach(section => {
+    row = writeWorkflowInstructionSection_(sheet, row, section);
+  });
+
+  formatWorkflowInstructionsSheet_(sheet, row - 1, workbookType);
+  return sheet;
+}
+
+function prepareWorkflowInstructionsSheet_(ss, sheet, workbookType) {
+  try {
+    const filter = sheet.getFilter();
+    if (filter) filter.remove();
+  } catch (error) {
+    // Instruction tabs do not need filters; skip if a transient sheet state blocks removal.
+  }
+
+  ensureMinimumSheetSize_(sheet, 140, 6);
+  sheet.getDataRange().breakApart();
+  sheet.clear();
+  sheet.setConditionalFormatRules([]);
+  sheet.showColumns(1, sheet.getMaxColumns());
+  if (sheet.getMaxColumns() > 6) sheet.hideColumns(7, sheet.getMaxColumns() - 6);
+  try {
+    sheet.setHiddenGridlines(true);
+  } catch (error) {
+    // Sheet chrome is best-effort in Apps Script contexts.
+  }
+  sheet.setTabColor(workbookType === 'payroll' ? UI_THEME.ink : UI_THEME.accent);
+  ss.setActiveSheet(sheet);
+  ss.moveActiveSheet(1);
+}
+
+function writeWorkflowInstructionSection_(sheet, startRow, section) {
+  let row = startRow;
+  sheet.getRange(row, 1, 1, 6).merge().setValue(section.eyebrow);
+  row += 1;
+  sheet.getRange(row, 1, 1, 6).merge().setValue(section.title);
+  row += 1;
+  if (section.description) {
+    sheet.getRange(row, 1, 1, 6).merge().setValue(section.description);
+    row += 1;
+  }
+
+  sheet.getRange(row, 1, 1, 6)
+    .setValues([normalizeInstructionRow_(section.headers)])
+    .setBorder(true, true, true, true, true, true, UI_THEME.ink, SpreadsheetApp.BorderStyle.SOLID);
+  row += 1;
+
+  const rows = section.rows.map(normalizeInstructionRow_);
+  sheet.getRange(row, 1, rows.length, 6)
+    .setValues(rows)
+    .setBorder(true, true, true, true, true, true, UI_THEME.rule, SpreadsheetApp.BorderStyle.SOLID);
+  return row + rows.length + 2;
+}
+
+function formatWorkflowInstructionsSheet_(sheet, lastRow, workbookType) {
+  const tabColor = workbookType === 'payroll' ? UI_THEME.ink : UI_THEME.accent;
+  sheet.setFrozenRows(4);
+  sheet.setColumnWidth(1, 120);
+  sheet.setColumnWidth(2, 170);
+  sheet.setColumnWidth(3, 250);
+  sheet.setColumnWidth(4, 250);
+  sheet.setColumnWidth(5, 170);
+  sheet.setColumnWidth(6, 280);
+
+  sheet.getRange(1, 1, sheet.getMaxRows(), 6)
+    .setBackground(UI_THEME.foundation)
+    .setFontFamily(UI_THEME.sans)
+    .setFontColor(UI_THEME.body)
+    .setFontSize(10)
+    .setVerticalAlignment('top')
+    .setWrap(true);
+
+  sheet.getRange(1, 1, 3, 6)
+    .setBackground(UI_THEME.ink)
+    .setFontColor(UI_THEME.card);
+  sheet.getRange(1, 1, 1, 6)
+    .setFontSize(10)
+    .setFontWeight('bold')
+    .setFontColor(UI_THEME.accent)
+    .setHorizontalAlignment('left');
+  sheet.getRange(2, 1, 1, 6)
+    .setFontFamily(UI_THEME.serif)
+    .setFontSize(28)
+    .setFontWeight('bold')
+    .setFontColor(UI_THEME.card);
+  sheet.getRange(3, 1, 1, 6)
+    .setFontSize(11)
+    .setFontColor('#EFE8DD');
+
+  sheet.getRange(5, 1, 2, 6)
+    .setBackground(UI_THEME.inset)
+    .setFontSize(10)
+    .setBorder(true, true, true, true, true, true, UI_THEME.rule, SpreadsheetApp.BorderStyle.SOLID);
+  sheet.getRange(5, 1, 2, 6)
+    .setFontWeight('normal');
+  sheet.getRange(5, 1, 2, 1).setFontWeight('bold').setFontColor(UI_THEME.muted);
+  sheet.getRange(5, 3, 2, 1).setFontWeight('bold').setFontColor(UI_THEME.muted);
+  sheet.getRange(5, 5, 2, 1).setFontWeight('bold').setFontColor(UI_THEME.muted);
+
+  for (let row = 8; row <= lastRow; row += 1) {
+    const value = String(sheet.getRange(row, 1).getValue() || '');
+    if (value.indexOf('SECTION ') === 0) {
+      sheet.getRange(row, 1, 1, 6)
+        .setBackground(UI_THEME.foundation)
+        .setFontColor(tabColor)
+        .setFontSize(9)
+        .setFontWeight('bold')
+        .setBorder(true, false, false, false, false, false, tabColor, SpreadsheetApp.BorderStyle.SOLID);
+      sheet.getRange(row + 1, 1, 1, 6)
+        .setBackground(UI_THEME.foundation)
+        .setFontFamily(UI_THEME.serif)
+        .setFontSize(18)
+        .setFontWeight('bold')
+        .setFontColor(UI_THEME.ink);
+      const description = String(sheet.getRange(row + 2, 1).getValue() || '');
+      const headerRow = description ? row + 3 : row + 2;
+      if (description) {
+        sheet.getRange(row + 2, 1, 1, 6)
+          .setBackground(UI_THEME.foundation)
+          .setFontSize(10)
+          .setFontColor(UI_THEME.muted);
+      }
+      sheet.getRange(headerRow, 1, 1, 6)
+        .setBackground(UI_THEME.ink)
+        .setFontColor(UI_THEME.card)
+        .setFontSize(9)
+        .setFontWeight('bold')
+        .setHorizontalAlignment('left')
+        .setBorder(true, true, true, true, true, true, UI_THEME.ink, SpreadsheetApp.BorderStyle.SOLID);
+    }
+  }
+
+  sheet.getRange(2, 1, 1, 6).setFontSize(28);
+  sheet.setRowHeight(1, 26);
+  sheet.setRowHeight(2, 52);
+  sheet.setRowHeight(3, 42);
+  sheet.setRowHeights(5, Math.max(lastRow - 4, 1), 38);
+}
+
+function getAttendanceWorkflowGuide_() {
+  return {
+    eyebrow: 'PHASE 1 OPERATING GUIDE',
+    title: 'Attendance Workflow Instructions',
+    subtitle: 'Use this workbook to collect clock events, maintain schedules, and produce the reviewed attendance log that payroll consumes.',
+    workbook: CONFIG.attendanceSpreadsheetName,
+    owner: 'Operations manager',
+    entryPoint: 'Attendance menu',
+    beforeUse: 'Confirm employees, schedules, and web app access.',
+    cadence: 'Daily review, pay-period closeout',
+    scope: 'Time capture, corrections, attendance status',
+    sections: [
+      {
+        eyebrow: 'SECTION 01',
+        title: 'Start Here',
+        description: 'The shortest safe path from setup to payroll-ready attendance.',
+        headers: ['Step', 'Owner', 'Action', 'Where', 'When', 'Done When'],
+        rows: [
+          ['1', 'System owner', 'Run setupPhase1() or configurePhase1SpreadsheetIds().', 'Apps Script editor', 'Initial setup', 'Both workbook IDs are stored and menus appear on open.'],
+          ['2', 'Operations manager', 'Review active employees and schedules before sharing the clock app.', 'Employees and Work Schedules', 'Before launch', 'Every active employee has a schedule and, if needed, a Web App PIN.'],
+          ['3', 'Employee', 'Clock in, start lunch, end lunch, and clock out in sequence.', 'Clock-in web app', 'Each workday', 'Clock Events receives an append-only record for each action.'],
+          ['4', 'Operations manager', 'Add missed or corrected punches without editing the audit trail directly.', 'Attendance menu', 'Same day when possible', 'Manual corrections show Source = MANUAL with useful notes.'],
+          ['5', 'Operations manager', 'Rebuild the Attendance Log after corrections or before payroll.', 'Attendance menu', 'Daily and at closeout', 'Attendance Log shows status, hours, late minutes, and exceptions.'],
+          ['6', 'Payroll processor', 'Use the reviewed log as the source for pay-period calculation.', 'Payroll workbook', 'After closeout', 'Payroll Output is generated from the latest attendance data.']
+        ]
+      },
+      {
+        eyebrow: 'SECTION 02',
+        title: 'Attendance Sheet Map',
+        description: 'Only edit source tabs intentionally. Treat derived tabs as review surfaces.',
+        headers: ['Tab', 'Purpose', 'Primary User', 'Editable?', 'Key Fields', 'UX Rule'],
+        rows: [
+          ['Employees', 'Roster and access control.', 'Operations manager', 'Yes', 'Employee Code, Status, Email, Web App PIN', 'Keep Employee Code stable; it joins every workbook.'],
+          ['Work Schedules', 'Effective-dated schedules by employee.', 'Operations manager', 'Yes', 'Effective From/To, day start/end, lunch window', 'Add a new row for schedule changes instead of overwriting history.'],
+          ['Holidays', 'Paid holiday exceptions.', 'Operations manager', 'Yes', 'Date, Paid?, Applies To', 'Use All unless the holiday is employee-specific.'],
+          ['Clock Events', 'Append-only clock event ledger.', 'Employees and managers', 'Append only', 'Timestamp, Employee Code, Event Type, Source', 'Do not delete production events; add a corrective manual event instead.'],
+          ['Attendance Log', 'Calculated daily status and payroll source.', 'Operations and payroll', 'Limited review', 'Status, Worked Hours, Late Minutes', 'Rebuild after source changes; override only PTO/UTO/Non-PTO/Holiday status.']
+        ]
+      },
+      {
+        eyebrow: 'SECTION 03',
+        title: 'Daily Controls',
+        description: 'Use these checks to keep the pay-period closeout small and predictable.',
+        headers: ['Frequency', 'Owner', 'Check', 'Source', 'Action', 'Escalation'],
+        rows: [
+          ['Daily', 'Operations manager', 'Employees scheduled today have clock-in activity.', 'Clock Events', 'Add missing manual entries with notes.', 'Follow up with employee if the workday cannot be confirmed.'],
+          ['Daily', 'Operations manager', 'Incomplete rows have a documented resolution path.', 'Attendance Log', 'Add missing clock-out or leave status unresolved for payroll review.', 'Payroll should not pay incomplete days without review.'],
+          ['Weekly', 'Operations manager', 'New hires and resignations are reflected in roster dates.', 'Employees', 'Set Start Date, End Date, and Status.', 'Coordinate lifecycle notes in Payroll workbook.'],
+          ['Pay close', 'Operations manager', 'Log is rebuilt for the full pay period.', 'Attendance menu', 'Run Rebuild Attendance Log.', 'Do not calculate payroll from a stale log.']
+        ]
+      },
+      {
+        eyebrow: 'SECTION 04',
+        title: 'Phase 1 Test Scenario',
+        description: 'Run injectPhase1TestData() to populate a compact scenario that exercises the main edge cases.',
+        headers: ['Employee', 'PIN', 'Scenario', 'Expected Review', 'Workbook Impact', 'Notes'],
+        rows: [
+          ['MARK', PHASE1_TEST.pins.MARK, 'Late on 2026-04-08.', 'Late minutes and deduction should appear.', 'Attendance Log and Payroll Calculations', 'Tests late arrival and late lunch return.'],
+          ['PAUL', PHASE1_TEST.pins.PAUL, 'Absent on scheduled Saturday 2026-04-04.', 'Absent day and deduction should appear.', 'Attendance Log and Payroll Calculations', 'No clock events are inserted for that day.'],
+          ['ANDREA', PHASE1_TEST.pins.ANDREA, 'Short day on 2026-04-10.', 'Short hours deduction should appear.', 'Attendance Log and Payroll Calculations', 'Clock-out is before scheduled end.'],
+          ['CHARISSE', PHASE1_TEST.pins.CHARISSE, 'Missing clock-out on 2026-04-14.', 'Payroll row should need review.', 'Attendance Log and Payroll Output', 'Calculated total remains blank until resolved.']
+        ]
+      }
+    ]
+  };
+}
+
+function getPayrollWorkflowGuide_() {
+  return {
+    eyebrow: 'PHASE 1 OPERATING GUIDE',
+    title: 'Payroll Workflow Instructions',
+    subtitle: 'Use this workbook to maintain private compensation data, calculate the pay period, and produce the payroll output for review.',
+    workbook: CONFIG.payrollSpreadsheetName,
+    owner: 'Payroll processor',
+    entryPoint: 'Payroll menu',
+    beforeUse: 'Confirm attendance has been rebuilt and compensation is complete.',
+    cadence: 'Mid-month and end-of-month payroll',
+    scope: 'Base pay, deductions, review output',
+    sections: [
+      {
+        eyebrow: 'SECTION 01',
+        title: 'Start Here',
+        description: 'A focused payroll run sequence that preserves review points before payment.',
+        headers: ['Step', 'Owner', 'Action', 'Where', 'When', 'Done When'],
+        rows: [
+          ['1', 'Operations manager', 'Rebuild Attendance Log for the target period.', 'Attendance workbook', 'Before calculation', 'Attendance statuses and late minutes are current.'],
+          ['2', 'Payroll processor', 'Review Compensation Master for blanks and effective dates.', 'Compensation Master', 'Before calculation', 'Every paid employee has an active compensation row.'],
+          ['3', 'Payroll processor', 'Confirm or create the target pay period.', 'Pay Periods', 'Each run', 'Period ID, dates, type, and status are correct.'],
+          ['4', 'Payroll processor', 'Calculate the pay period.', 'Payroll menu', 'Each run', 'Payroll Calculations and Payroll Output are refreshed.'],
+          ['5', 'Payroll approver', 'Review warnings, deductions, and Needs review rows.', 'Payroll Calculations', 'Before payment', 'Exceptions have notes or correction actions.'],
+          ['6', 'Payroll processor', 'Finalize after approval.', 'Payroll menu', 'After approval', 'Pay Period status is Paid and output is ready for export.']
+        ]
+      },
+      {
+        eyebrow: 'SECTION 02',
+        title: 'Payroll Sheet Map',
+        description: 'The private workbook separates compensation inputs from calculated pay output.',
+        headers: ['Tab', 'Purpose', 'Primary User', 'Editable?', 'Key Fields', 'UX Rule'],
+        rows: [
+          ['Compensation Master', 'Private compensation and benefit setup.', 'Payroll processor', 'Yes', 'Effective dates, salary, benefits, bonuses', 'Leave unknown compensation blank until confirmed.'],
+          ['Pay Periods', 'Calendar and status control for pay runs.', 'Payroll processor', 'Yes', 'Period ID, Pay Date, Start/End, Status', 'Use one row per pay period and keep IDs stable.'],
+          ['Payroll Calculations', 'Detailed calculated pay and deductions.', 'Payroll approver', 'Review only', 'Worked Hours, Deductions, Calculated Total', 'Investigate Needs review before payment.'],
+          ['Payroll Output', 'Compact export-facing payroll summary.', 'Payroll processor', 'Review then export', 'Base, Deductions, TOTAL, Status', 'Export only after exceptions are cleared or approved.'],
+          ['Employee Lifecycle Log', 'Hire, termination, and reactivation audit.', 'Payroll and operations', 'Yes', 'Event Type, Event Date, Effective Date', 'Capture lifecycle decisions that affect payroll timing.']
+        ]
+      },
+      {
+        eyebrow: 'SECTION 03',
+        title: 'Pay Run QA',
+        description: 'These checks catch the Phase 1 failure modes before money leaves the workflow.',
+        headers: ['Check', 'Where', 'Signal', 'Likely Cause', 'Action', 'Owner'],
+        rows: [
+          ['Missing compensation', 'Payroll Calculations', 'Status = Needs comp', 'Base salary is blank or no effective row exists.', 'Fill Compensation Master or remove the employee from this run.', 'Payroll processor'],
+          ['Incomplete attendance', 'Payroll Output', 'Status = Needs review', 'Clock-out is missing for a scheduled day.', 'Correct attendance, rebuild log, then recalculate.', 'Operations manager'],
+          ['Absent deduction', 'Payroll Calculations', 'Absent Days > 0', 'Scheduled day has no clock-in.', 'Confirm absence classification before approval.', 'Payroll approver'],
+          ['Late deduction', 'Payroll Calculations', 'Late Minutes > 0', 'Late start or late lunch return.', 'Review against policy and correct source events if needed.', 'Payroll approver'],
+          ['Short hours deduction', 'Payroll Calculations', 'Short Hours > 0', 'Worked hours are below eight for a scheduled day.', 'Confirm early leave, correction, or override path.', 'Payroll approver']
+        ]
+      },
+      {
+        eyebrow: 'SECTION 04',
+        title: 'Confidential Handoff',
+        description: 'Keep compensation work private while making the approval state easy to audit.',
+        headers: ['Moment', 'Owner', 'Action', 'Artifact', 'Access', 'Notes'],
+        rows: [
+          ['Before calculation', 'Payroll processor', 'Confirm only authorized users can access this workbook.', 'Sharing settings', 'Restricted', 'Attendance users do not need payroll workbook access.'],
+          ['During review', 'Payroll approver', 'Use Payroll Calculations for details and Payroll Output for totals.', 'Calculated tabs', 'Private', 'Do not edit calculated rows directly.'],
+          ['After approval', 'Payroll processor', 'Mark the period Paid and export output if needed.', 'Payroll menu', 'Private', 'The CSV export is a generated artifact outside the sheet.'],
+          ['After corrections', 'Payroll processor', 'Recalculate after any attendance or compensation change.', 'Payroll menu', 'Private', 'Previous calculated rows are replaced by the latest run.']
+        ]
+      },
+      {
+        eyebrow: 'SECTION 05',
+        title: 'Phase 1 Test Scenario',
+        description: 'Run injectPhase1TestData() to create a private test pay period without using a production period ID.',
+        headers: ['Period ID', 'Employee Set', 'Expected Warning', 'Review Tab', 'Status', 'Notes'],
+        rows: [
+          [PHASE1_TEST.periodId, PHASE1_TEST.employeeCodes.join(', '), 'MARK late minutes.', 'Payroll Calculations', 'Calculated', 'Tests late deduction math.'],
+          [PHASE1_TEST.periodId, PHASE1_TEST.employeeCodes.join(', '), 'PAUL absent day.', 'Payroll Calculations', 'Calculated', 'Tests absence deduction math.'],
+          [PHASE1_TEST.periodId, PHASE1_TEST.employeeCodes.join(', '), 'ANDREA short hours.', 'Payroll Calculations', 'Calculated', 'Tests short-hours deduction math.'],
+          [PHASE1_TEST.periodId, PHASE1_TEST.employeeCodes.join(', '), 'CHARISSE incomplete day.', 'Payroll Output', 'Needs review', 'Total remains blank until attendance is corrected.']
+        ]
+      }
+    ]
+  };
+}
+
+function normalizeInstructionRow_(row) {
+  const values = row.slice(0, 6);
+  while (values.length < 6) values.push('');
+  return values;
+}
+
+function ensureMinimumSheetSize_(sheet, minRows, minColumns) {
+  if (sheet.getMaxRows() < minRows) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), minRows - sheet.getMaxRows());
+  }
+  if (sheet.getMaxColumns() < minColumns) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), minColumns - sheet.getMaxColumns());
+  }
+}
+
 function installOpenTriggers_(spreadsheets) {
   const existing = ScriptApp.getProjectTriggers();
   existing.forEach(trigger => {
@@ -1064,6 +1618,7 @@ function applySpreadsheetChrome_(ss, workbookType) {
   const tabColor = workbookType === 'payroll' ? UI_THEME.ink : UI_THEME.accent;
   ss.getSheets().forEach(sheet => {
     sheet.setTabColor(tabColor);
+    if (sheet.getName() === CONFIG.workflowInstructionsTab) return;
     const lastColumn = Math.max(sheet.getLastColumn(), 1);
     const lastRow = Math.max(sheet.getLastRow(), 1);
     sheet.getRange(1, 1, lastRow, lastColumn)
