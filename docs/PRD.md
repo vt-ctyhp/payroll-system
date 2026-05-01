@@ -566,7 +566,7 @@ USD throughout. Internal calculations carry full precision. Display values round
 **Offboard Employee dialog (Phase 5):**
 - Dropdown: select active employee
 - Fields: Resignation/Termination type, Last Working Day, Reason, Notes
-- Preview: shows what the Final Payroll will include (prorated benefits, prorated KPI if approved, attendance bonus forfeit notice, accrued PTO payout if applicable)
+- Preview: shows what the Final Payroll will include (prorated benefits, prorated KPI if approved, attendance bonus forfeit notice) plus a year-end PTO payout estimate when remaining PTO exists
 - Confirm → sets Status = Resigned/Terminated, sets End Date in Employees, sets Effective To on current Work Schedule and Compensation Master rows, generates Final Payroll calculation, logs in Employee Lifecycle Log
 - Past attendance, past payrolls, past comp history — all retained untouched
 
@@ -700,7 +700,7 @@ Sourced from `_MASTER__Compensation_Plans.xlsx`. **Best-guess assumption: all em
 8. **Holidays calendar** — who maintains it? Fill in 2026 holidays before going live.
 9. **Time zones** — Confirm all logged times are in employee local time, not US PST, and confirm whether all employees are in the same time zone.
 10. **Web app authentication** — Do all employees have Google accounts? If not, we'll fall back to the PIN approach for those people.
-11. **PTO accrual on offboarding** — If an employee resigns with unused PTO, do they get paid out for it, or does it lapse? Affects Final Payroll calculation.
+11. **PTO payout policy** — Resolved: unused PTO payout is calculated at year end, not in final payroll. The payout is `remaining PTO days × daily base rate × 1.5`, using base pay only and excluding benefits.
 
 ---
 

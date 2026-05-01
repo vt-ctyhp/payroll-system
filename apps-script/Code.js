@@ -4042,6 +4042,7 @@ function buildFinalPayrollPreview_(attendance, payroll, employeeCode, lastWorkin
   const code = normalizeCode_(employeeCode);
   const employee = getEmployeeRowByCodeAnyStatus_(attendance, code);
   if (!employee) throw new Error(`${code} was not found.`);
+  refreshPtoBalances_(attendance);
   const lastDay = dateOnly_(lastWorkingDay);
   const plan = buildFinalPayrollPlan_(payroll, code, lastDay);
   const comp = getCurrentCompRow_(payroll, code, lastDay);
@@ -4054,7 +4055,7 @@ function buildFinalPayrollPreview_(attendance, payroll, employeeCode, lastWorkin
     ? ''
     : round2_(monthlyBenefit * (eligibleDays / scheduledInMonth));
   const kpi = getFinalKpiPreview_(attendance, payroll, code, lastDay, plan);
-  const ptoBalance = getPtoBalanceSummaryForEmployee_(code, lastDay.getFullYear());
+  const ptoPayout = calculateYearEndPtoPayout_(attendance, payroll, code, lastDay.getFullYear(), lastDay);
   return {
     employeeCode: code,
     employee: employee['Display Name'] || employee['Full Name'] || code,
@@ -4068,8 +4069,45 @@ function buildFinalPayrollPreview_(attendance, payroll, employeeCode, lastWorkin
     eligibleDays,
     attendanceBonus: 'Forfeited',
     kpi,
-    ptoPayout: '',
-    ptoPayoutNote: 'PTO payout policy is not configured; leave blank unless you confirm a manual payout adjustment.'
+    ptoPayout: ptoPayout.amount,
+    ptoPayoutNote: ptoPayout.note
+  };
+}
+
+function calculateYearEndPtoPayout_(attendance, payroll, employeeCode, year, rateReferenceDate) {
+  const code = normalizeCode_(employeeCode);
+  const balance = getPtoBalanceSummaryForEmployee_(code, year);
+  const remainingPto = balance ? toNumberOrBlank_(balance.remainingPto) : '';
+  if (remainingPto === '' || remainingPto <= 0) {
+    return {
+      amount: 0,
+      note: 'Year-end PTO payout: no remaining PTO days are currently available for payout.'
+    };
+  }
+
+  const comp = getCurrentCompRow_(payroll, code, rateReferenceDate);
+  const monthlyBase = comp ? toNumberOrBlank_(comp['Monthly Base Salary']) : '';
+  if (monthlyBase === '') {
+    return {
+      amount: '',
+      note: 'Year-end PTO payout cannot be estimated because Monthly Base Salary is blank. Benefits are excluded from this calculation.'
+    };
+  }
+
+  const schedules = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules));
+  const scheduledDaysInMonth = countScheduledDaysInMonth_(schedules, code, rateReferenceDate);
+  if (!scheduledDaysInMonth) {
+    return {
+      amount: '',
+      note: 'Year-end PTO payout cannot be estimated because no scheduled days were found for the rate reference month.'
+    };
+  }
+
+  const dailyBaseRate = monthlyBase / scheduledDaysInMonth;
+  const amount = round2_(remainingPto * dailyBaseRate * 1.5);
+  return {
+    amount,
+    note: `Year-end PTO payout estimate only; not included in final payroll. Formula: ${round2_(remainingPto)} remaining PTO day(s) x ${round2_(dailyBaseRate)} daily base rate x 1.5. Benefits excluded.`
   };
 }
 
