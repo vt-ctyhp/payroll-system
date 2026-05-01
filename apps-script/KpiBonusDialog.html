@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        color-scheme: light;
+        --bg-foundation: #F7F1EB;
+        --surface-card: #FBF7F1;
+        --surface-inset: #EFE8DD;
+        --ink-primary: #2A2725;
+        --ink-body: #4A4540;
+        --ink-muted: #8A8178;
+        --rule: #D4CFC4;
+        --accent: #E91D79;
+        --serif: 'Cormorant Garamond', Georgia, serif;
+        --sans: 'Inter', system-ui, -apple-system, sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg-foundation);
+        color: var(--ink-body);
+        font: 14px/1.5 var(--sans);
+        -webkit-font-smoothing: antialiased;
+      }
+      form {
+        padding: 28px 28px 0;
+      }
+      h2 {
+        margin: 0 0 4px;
+        color: var(--ink-primary);
+        font-family: var(--serif);
+        font-size: 22px;
+        font-weight: 400;
+        line-height: 1.2;
+      }
+      .eyebrow,
+      label,
+      button,
+      th,
+      .selection-note {
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      .eyebrow,
+      label,
+      .selection-note {
+        color: var(--ink-muted);
+      }
+      .section-head {
+        margin-bottom: 18px;
+        padding-bottom: 14px;
+        border-bottom: 1px solid var(--rule);
+      }
+      select,
+      input,
+      textarea {
+        width: 100%;
+        min-height: 36px;
+        border: 0;
+        border-bottom: 1px solid var(--rule);
+        border-radius: 0;
+        padding: 6px 2px;
+        background: transparent;
+        color: var(--ink-primary);
+        font: inherit;
+        font-size: 14px;
+        font-variant-numeric: tabular-nums;
+        appearance: none;
+        -webkit-appearance: none;
+      }
+      select:focus,
+      input:focus,
+      textarea:focus {
+        outline: none;
+        border-bottom: 2px solid var(--accent);
+        padding-bottom: 5px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 22px;
+      }
+      th,
+      td {
+        padding: 11px 9px;
+        border-bottom: 1px solid var(--rule);
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        border-top: 1px solid var(--rule);
+        background: var(--surface-inset);
+        color: var(--ink-muted);
+      }
+      td {
+        font-variant-numeric: tabular-nums;
+      }
+      .employee-code {
+        display: block;
+        margin-top: 2px;
+        color: var(--ink-muted);
+        font-size: 10px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .percent {
+        width: 92px;
+      }
+      .amount {
+        color: var(--ink-primary);
+        font-family: var(--serif);
+        font-size: 18px;
+        white-space: nowrap;
+      }
+      .notes {
+        min-height: 34px;
+        resize: vertical;
+      }
+      .status {
+        min-height: 22px;
+        margin: 18px 0 0;
+        color: var(--ink-muted);
+        font-size: 13px;
+      }
+      .error { color: var(--accent); }
+      .actions {
+        position: sticky;
+        bottom: 0;
+        display: flex;
+        justify-content: flex-end;
+        gap: 12px;
+        margin: 28px -28px 0;
+        padding: 18px 28px;
+        border-top: 2px solid var(--accent);
+        background: var(--bg-foundation);
+      }
+      button {
+        min-height: 42px;
+        padding: 0 22px;
+        border: 1px solid var(--ink-primary);
+        border-radius: 0;
+        background: transparent;
+        color: var(--ink-primary);
+        font-family: var(--sans);
+        cursor: pointer;
+      }
+      button:hover:not(:disabled),
+      button.primary {
+        background: var(--ink-primary);
+        color: var(--bg-foundation);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+    </style>
+  </head>
+  <body>
+    <form onsubmit="submitForm(event)">
+      <div class="section-head">
+        <p class="eyebrow">Monthly Performance Approval</p>
+        <h2>KPI Bonuses</h2>
+      </div>
+
+      <label for="periodId">Pay Period</label>
+      <select id="periodId" onchange="loadPeriod()" required></select>
+      <p id="periodNote" class="selection-note"></p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Employee</th>
+            <th>KPI Max</th>
+            <th>Approved %</th>
+            <th>Amount</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody id="employeeRows">
+          <tr><td colspan="5">Loading...</td></tr>
+        </tbody>
+      </table>
+
+      <p id="status" class="status">Loading...</p>
+
+      <div class="actions">
+        <button type="button" onclick="google.script.host.close()">Cancel</button>
+        <button id="saveButton" class="primary" type="submit">Save KPI Bonuses</button>
+      </div>
+    </form>
+
+    <script>
+      let employees = [];
+
+      function init() {
+        google.script.run
+          .withSuccessHandler(data => {
+            document.getElementById('periodId').innerHTML = data.periods.map(period => {
+              const label = `${period.periodId} | ${period.periodStart} to ${period.periodEnd} | ${period.type} | ${period.status}`;
+              return `<option value="${escapeAttr(period.periodId)}" ${period.periodId === data.defaultPeriodId ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+            }).join('');
+            loadPeriod();
+          })
+          .withFailureHandler(showError)
+          .getKpiBonusDialogData();
+      }
+
+      function loadPeriod() {
+        const periodId = document.getElementById('periodId').value;
+        if (!periodId) return;
+        setBusy(true);
+        setStatus('Loading employee KPI max values.');
+        google.script.run
+          .withSuccessHandler(data => {
+            employees = data.employees || [];
+            document.getElementById('periodNote').textContent = data.periodType === 'Mid'
+              ? 'KPI bonuses are paid on Mid payrolls after manager approval.'
+              : 'KPI entries can be saved here, but payroll calculations only pay KPI bonuses on Mid payrolls.';
+            renderRows();
+            setStatus('Ready.');
+            setBusy(false);
+          })
+          .withFailureHandler(error => {
+            showError(error);
+            setBusy(false);
+          })
+          .getKpiBonusPeriodData(periodId);
+      }
+
+      function renderRows() {
+        document.getElementById('employeeRows').innerHTML = employees.map(employee => `
+          <tr data-code="${escapeAttr(employee.employeeCode)}" data-max="${escapeAttr(employee.kpiMax)}">
+            <td>${escapeHtml(employee.displayName)}<span class="employee-code">${escapeHtml(employee.employeeCode)}</span></td>
+            <td>${formatCurrency(employee.kpiMax)}</td>
+            <td><input class="percent" type="number" min="0" max="100" step="1" value="${escapeAttr(employee.approvedPercent)}" oninput="updateAmount(this)" placeholder="0"></td>
+            <td class="amount">${escapeHtml(employee.approvedAmount === '' ? '' : formatCurrency(employee.approvedAmount))}</td>
+            <td><textarea class="notes" placeholder="Approval notes">${escapeHtml(employee.notes || '')}</textarea></td>
+          </tr>
+        `).join('');
+        document.querySelectorAll('.percent').forEach(input => updateAmount(input));
+      }
+
+      function updateAmount(input) {
+        const row = input.closest('tr');
+        const hasMax = row.dataset.max !== '';
+        const max = Number(row.dataset.max);
+        const percent = input.value === '' ? '' : Number(input.value);
+        const amountCell = row.querySelector('.amount');
+        if (input.value === '') {
+          amountCell.textContent = '';
+          return;
+        }
+        if (!hasMax || !Number.isFinite(max)) {
+          amountCell.textContent = percent > 0 ? 'Comp blank' : '$0.00';
+          return;
+        }
+        amountCell.textContent = formatCurrency(max * percent / 100);
+      }
+
+      function submitForm(event) {
+        event.preventDefault();
+        const rows = Array.from(document.querySelectorAll('#employeeRows tr')).map(row => ({
+          employeeCode: row.dataset.code,
+          approvedPercent: row.querySelector('.percent').value.trim(),
+          notes: row.querySelector('.notes').value.trim()
+        }));
+        setBusy(true);
+        setStatus('Saving KPI bonus approvals.');
+        google.script.run
+          .withSuccessHandler(result => {
+            setStatus(result.message || 'Saved.');
+            setBusy(false);
+          })
+          .withFailureHandler(error => {
+            showError(error);
+            setBusy(false);
+          })
+          .saveKpiBonuses({
+            periodId: document.getElementById('periodId').value,
+            rows
+          });
+      }
+
+      function setBusy(isBusy) {
+        document.getElementById('saveButton').disabled = isBusy;
+      }
+
+      function setStatus(message, isError) {
+        const node = document.getElementById('status');
+        node.textContent = message || '';
+        node.className = isError ? 'status error' : 'status';
+      }
+
+      function showError(error) {
+        setStatus(error && error.message ? error.message : String(error), true);
+      }
+
+      function formatCurrency(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return '';
+        return `$${number.toFixed(2)}`;
+      }
+
+      function escapeHtml(value) {
+        return String(value == null ? '' : value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      function escapeAttr(value) {
+        return escapeHtml(value).replace(/`/g, '&#096;');
+      }
+
+      init();
+    </script>
+  </body>
+</html>

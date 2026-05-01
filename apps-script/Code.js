@@ -37,7 +37,8 @@ const CONFIG = {
     calculations: 'Payroll Calculations',
     output: 'Payroll Output',
     lifecycle: 'Employee Lifecycle Log',
-    paTracker: 'Quarterly PA Tracker'
+    paTracker: 'Quarterly PA Tracker',
+    bonuses: 'Bonuses & Adjustments'
   },
   workflowInstructionsTab: '0. Workflow Instructions',
   monthlyAttendanceBonusLateMinuteLimit: 90
@@ -161,17 +162,26 @@ const HEADERS = {
     'Short Hours Deduction',
     'Scheduled Base',
     'Total Deductions',
+    'Monthly Benefits',
+    'Benefit Eligible Days',
+    'Benefit Period Days',
+    'Benefits',
     'Monthly Attendance Bonus',
     'Attendance Bonus Status',
     'Attendance Bonus Notes',
     'Quarterly PA Bonus',
     'Quarterly PA Status',
     'Quarterly PA Notes',
+    'KPI Bonus',
+    'Additional Bonus',
+    'Positive Adjustments',
+    'Negative Adjustments',
     'Calculated Total',
     'Status',
     'Notes'
   ],
   output: ['Employee', 'Period', 'Base', 'Deductions', 'Benefits', 'Att. Bonus', 'KPI Bonus', 'Other Bonus', 'Adjustments', 'TOTAL', 'Status', 'Notes'],
+  bonuses: ['Pay Period ID', 'Employee Code', 'Type (KPI / Additional / Positive Adj / Negative Adj)', 'Description', 'Amount', 'Approved By', 'Approved At'],
   lifecycle: [
     'Event ID',
     'Employee Code',
@@ -433,6 +443,9 @@ function addPayrollMenu_() {
     .addItem('Calculate Pay Period...', 'showCalculatePayPeriodDialog')
     .addItem('Refresh Attendance Data', 'refreshAttendanceDataFromMenu')
     .addItem('Refresh Quarterly PA Tracker', 'refreshQuarterlyPaTrackerFromMenu')
+    .addItem('Enter KPI Bonuses for Period...', 'showKpiBonusDialog')
+    .addItem('Enter Additional Bonus...', 'showAdditionalBonusDialog')
+    .addItem('Enter Adjustment...', 'showAdjustmentDialog')
     .addItem('Finalize & Mark as Paid', 'markSelectedPayPeriodPaidFromMenu')
     .addSeparator()
     .addItem('Add New Employee...', 'showAddEmployeeDialog')
@@ -501,6 +514,25 @@ function showCalculatePayPeriodDialog() {
 function showScorecardDialog() {
   const html = HtmlService.createHtmlOutputFromFile('ScorecardDialog').setWidth(920).setHeight(760);
   SpreadsheetApp.getUi().showModalDialog(html, 'Attendance Scorecard');
+}
+
+function showKpiBonusDialog() {
+  const html = HtmlService.createHtmlOutputFromFile('KpiBonusDialog').setWidth(940).setHeight(720);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Enter KPI Bonuses');
+}
+
+function showAdditionalBonusDialog() {
+  const template = HtmlService.createTemplateFromFile('BonusAdjustmentDialog');
+  template.entryMode = 'additional';
+  const html = template.evaluate().setWidth(620).setHeight(560);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Enter Additional Bonus');
+}
+
+function showAdjustmentDialog() {
+  const template = HtmlService.createTemplateFromFile('BonusAdjustmentDialog');
+  template.entryMode = 'adjustment';
+  const html = template.evaluate().setWidth(620).setHeight(600);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Enter Adjustment');
 }
 
 function rebuildAttendanceLogFromMenu() {
@@ -780,6 +812,140 @@ function getScorecardDialogData() {
   };
 }
 
+function getKpiBonusDialogData() {
+  const payroll = requirePayrollSpreadsheet_();
+  setupPayrollSpreadsheet_(payroll);
+  const periods = listPayPeriodsForUi_();
+  return {
+    periods,
+    defaultPeriodId: getDefaultOpenPeriodIdByType_(periods, 'Mid') || getDefaultOpenPeriodId_(periods)
+  };
+}
+
+function getKpiBonusPeriodData(periodId) {
+  const payroll = requirePayrollSpreadsheet_();
+  const attendance = requireAttendanceSpreadsheet_();
+  setupPayrollSpreadsheet_(payroll);
+  const period = getPayPeriodById_(payroll, periodId);
+  const periodEnd = parseDateOrBlank_(period['Period End']);
+  const compRows = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp));
+  const bonusRows = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.bonuses));
+  const existing = groupBonusRowsByEmployee_(bonusRows, periodId, 'KPI');
+
+  const employees = listEmployeesForUi_()
+    .filter(employee => employee.status === 'Active')
+    .map(employee => {
+      const comp = getCompForDate_(compRows, employee.employeeCode, periodEnd);
+      const kpiMax = comp ? toNumberOrBlank_(comp['Monthly KPI Bonus (Max)']) : '';
+      const current = existing[employee.employeeCode] || { amount: 0, descriptions: [] };
+      const approvedPercent = kpiMax === '' || !current.amount ? '' : round2_((current.amount / kpiMax) * 100);
+      return {
+        employeeCode: employee.employeeCode,
+        displayName: employee.displayName,
+        kpiMax,
+        approvedPercent,
+        approvedAmount: current.amount ? round2_(current.amount) : '',
+        notes: current.descriptions.join(' | ')
+      };
+    });
+
+  return {
+    periodId,
+    periodType: period['Period Type (Mid / EOM)'],
+    employees
+  };
+}
+
+function saveKpiBonuses(payload) {
+  payload = payload || {};
+  const periodId = payload.periodId;
+  if (!periodId) throw new Error('Select a pay period.');
+  const payroll = requirePayrollSpreadsheet_();
+  const period = getPayPeriodById_(payroll, periodId);
+  const periodEnd = parseDateOrBlank_(period['Period End']);
+  const compRows = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp));
+  const rows = payload.rows || [];
+  const approvedBy = getActiveUserEmail_();
+  const approvedAt = new Date();
+  const replacements = [];
+  const employeeCodes = [];
+
+  rows.forEach(row => {
+    const code = normalizeCode_(row.employeeCode);
+    if (!code) return;
+    employeeCodes.push(code);
+    const approvedPercent = toNumberOrBlank_(row.approvedPercent);
+    if (approvedPercent === '') return;
+    if (approvedPercent < 0 || approvedPercent > 100) throw new Error(`KPI percentage for ${code} must be between 0 and 100.`);
+    const comp = getCompForDate_(compRows, code, periodEnd);
+    const kpiMax = comp ? toNumberOrBlank_(comp['Monthly KPI Bonus (Max)']) : '';
+    if (kpiMax === '' && approvedPercent > 0) throw new Error(`${code} has no Monthly KPI Bonus (Max) in Compensation Master.`);
+    const amount = kpiMax === '' ? 0 : round2_(kpiMax * approvedPercent / 100);
+    const note = String(row.notes || '').trim();
+    replacements.push([
+      periodId,
+      code,
+      'KPI',
+      note ? `KPI approved ${approvedPercent}%. ${note}` : `KPI approved ${approvedPercent}%.`,
+      amount,
+      approvedBy,
+      approvedAt
+    ]);
+  });
+
+  replaceBonusAdjustmentRows_(getSheet_(payroll, CONFIG.payrollTabs.bonuses), periodId, ['KPI'], employeeCodes, replacements);
+  applyPayrollFormatting_(payroll);
+  return {
+    message: `${replacements.length} KPI bonus record(s) saved for ${periodId}. Recalculate the pay period to update Payroll Output.`
+  };
+}
+
+function getBonusAdjustmentDialogData(entryMode) {
+  const payroll = requirePayrollSpreadsheet_();
+  setupPayrollSpreadsheet_(payroll);
+  const periods = listPayPeriodsForUi_();
+  return {
+    entryMode,
+    periods,
+    defaultPeriodId: getDefaultOpenPeriodId_(periods),
+    employees: listEmployeesForUi_().filter(employee => employee.status === 'Active')
+  };
+}
+
+function addBonusAdjustment(payload) {
+  payload = payload || {};
+  const periodId = payload.periodId;
+  const employeeCode = normalizeCode_(payload.employeeCode);
+  const mode = payload.entryMode;
+  const amount = toNumberOrBlank_(payload.amount);
+  if (!periodId) throw new Error('Select a pay period.');
+  if (!employeeCode) throw new Error('Select an employee.');
+  if (amount === '' || amount <= 0) throw new Error('Enter an amount greater than zero.');
+
+  const payroll = requirePayrollSpreadsheet_();
+  getPayPeriodById_(payroll, periodId);
+  const type = mode === 'additional' ? 'Additional' : payload.adjustmentType;
+  if (['Additional', 'Positive Adj', 'Negative Adj'].indexOf(type) === -1) {
+    throw new Error('Select a valid bonus or adjustment type.');
+  }
+  const description = String(payload.description || '').trim();
+  if (!description) throw new Error('Description is required.');
+
+  appendRows_(getSheet_(payroll, CONFIG.payrollTabs.bonuses), [[
+    periodId,
+    employeeCode,
+    type,
+    description,
+    round2_(amount),
+    getActiveUserEmail_(),
+    new Date()
+  ]]);
+  applyPayrollFormatting_(payroll);
+  return {
+    message: `${type} saved for ${employeeCode}. Recalculate ${periodId} to update Payroll Output.`
+  };
+}
+
 function getEmployeeScorecard(payload) {
   payload = payload || {};
   const employeeCode = normalizeCode_(payload.employeeCode);
@@ -959,6 +1125,7 @@ function setupPayrollSpreadsheet_(ss) {
   ensureSheet_(ss, CONFIG.payrollTabs.output, HEADERS.output);
   ensureSheet_(ss, CONFIG.payrollTabs.lifecycle, HEADERS.lifecycle);
   ensureSheet_(ss, CONFIG.payrollTabs.paTracker, HEADERS.paTracker);
+  ensureSheet_(ss, CONFIG.payrollTabs.bonuses, HEADERS.bonuses);
   seedPayPeriods_(ss, new Date().getFullYear());
   removeDefaultBlankSheet_(ss);
   applyPayrollFormatting_(ss);
@@ -1518,6 +1685,171 @@ function upsertQuarterlyPaTrackerRows_(sheet, rows) {
   appendRows_(sheet, append);
 }
 
+function listPayPeriodsForUi_() {
+  const payroll = requirePayrollSpreadsheet_();
+  return readObjects_(getSheet_(payroll, CONFIG.payrollTabs.periods)).map(row => ({
+    periodId: row['Period ID'],
+    payDate: displayDate_(row['Pay Date']),
+    periodStart: displayDate_(row['Period Start']),
+    periodEnd: displayDate_(row['Period End']),
+    type: row['Period Type (Mid / EOM)'],
+    status: row['Status (Open / Calculated / Paid)']
+  }));
+}
+
+function getPayPeriodById_(payroll, periodId) {
+  const period = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.periods))
+    .filter(row => row['Period ID'] === periodId)[0];
+  if (!period) throw new Error(`Pay period ${periodId} was not found.`);
+  return period;
+}
+
+function getDefaultOpenPeriodIdByType_(periods, type) {
+  const today = dateOnly_(new Date());
+  const matches = periods
+    .filter(period => period.status === 'Open' && period.type === type)
+    .map(period => ({ id: period.periodId, payDate: parseDateOrBlank_(period.payDate) }))
+    .filter(period => period.payDate)
+    .sort((a, b) => Math.abs(a.payDate.getTime() - today.getTime()) - Math.abs(b.payDate.getTime() - today.getTime()));
+  return matches.length ? matches[0].id : '';
+}
+
+function groupBonusRowsByEmployee_(bonusRows, periodId, type) {
+  const grouped = {};
+  bonusRows.forEach(row => {
+    if (row['Pay Period ID'] !== periodId) return;
+    if (row['Type (KPI / Additional / Positive Adj / Negative Adj)'] !== type) return;
+    const code = normalizeCode_(row['Employee Code']);
+    if (!grouped[code]) grouped[code] = { amount: 0, descriptions: [] };
+    grouped[code].amount += toNumberOrZero_(row.Amount);
+    if (row.Description) grouped[code].descriptions.push(String(row.Description));
+  });
+  return grouped;
+}
+
+function replaceBonusAdjustmentRows_(sheet, periodId, types, employeeCodes, replacements) {
+  const typeSet = new Set(types);
+  const codeSet = new Set(employeeCodes.map(normalizeCode_).filter(Boolean));
+  const values = sheet.getDataRange().getValues();
+  if (values.length > 1) {
+    const headers = values[0];
+    const periodIdx = headers.indexOf('Pay Period ID');
+    const codeIdx = headers.indexOf('Employee Code');
+    const typeIdx = headers.indexOf('Type (KPI / Additional / Positive Adj / Negative Adj)');
+    for (let row = values.length - 1; row >= 1; row -= 1) {
+      const matchesPeriod = values[row][periodIdx] === periodId;
+      const matchesType = typeSet.has(values[row][typeIdx]);
+      const matchesCode = codeSet.has(normalizeCode_(values[row][codeIdx]));
+      if (matchesPeriod && matchesType && matchesCode) {
+        sheet.deleteRow(row + 1);
+      }
+    }
+  }
+  appendRows_(sheet, replacements);
+}
+
+function summarizeBonusAdjustments_(bonusRows, periodId, employeeCode) {
+  const summary = {
+    kpi: 0,
+    additional: 0,
+    positive: 0,
+    negative: 0,
+    notes: []
+  };
+  const code = normalizeCode_(employeeCode);
+  bonusRows.forEach(row => {
+    if (row['Pay Period ID'] !== periodId || normalizeCode_(row['Employee Code']) !== code) return;
+    const type = row['Type (KPI / Additional / Positive Adj / Negative Adj)'];
+    const amount = toNumberOrZero_(row.Amount);
+    if (type === 'KPI') summary.kpi += amount;
+    if (type === 'Additional') summary.additional += amount;
+    if (type === 'Positive Adj') summary.positive += amount;
+    if (type === 'Negative Adj') summary.negative += amount;
+    if (row.Description) summary.notes.push(`${type}: ${row.Description}`);
+  });
+  return summary;
+}
+
+function calculateBenefitsForPeriod_(employeeCode, employee, period, context, comp) {
+  const monthlyBenefit = comp ? toNumberOrBlank_(comp['Monthly Benefits']) : '';
+  const periodStart = dateOnly_(parseDateOrBlank_(period['Period Start']));
+  const periodEnd = dateOnly_(parseDateOrBlank_(period['Period End']));
+  const monthStart = new Date(periodStart.getFullYear(), periodStart.getMonth(), 1);
+  const monthEnd = new Date(periodStart.getFullYear(), periodStart.getMonth() + 1, 0);
+  const totalScheduledDays = countScheduledDaysInMonth_(context.schedules, employeeCode, monthStart);
+  if (monthlyBenefit === '') {
+    return {
+      monthlyBenefit: '',
+      eligibleDays: '',
+      periodEligibleDays: '',
+      amount: '',
+      notes: 'Monthly Benefits is blank in Compensation Master.'
+    };
+  }
+  if (!totalScheduledDays) {
+    return {
+      monthlyBenefit,
+      eligibleDays: 0,
+      periodEligibleDays: 0,
+      amount: 0,
+      notes: 'No scheduled days found for benefit proration.'
+    };
+  }
+
+  const unpaidStatusByDate = {};
+  context.attendanceRows.forEach(row => {
+    if (normalizeCode_(row['Employee Code']) !== normalizeCode_(employeeCode)) return;
+    const date = parseDateOrBlank_(row.Date);
+    if (!date) return;
+    const status = row.Status || '';
+    if (status === 'UTO' || status === 'Non-PTO') {
+      unpaidStatusByDate[formatDateKey_(date)] = true;
+    }
+  });
+
+  let eligibleDays = 0;
+  let periodEligibleDays = 0;
+  for (let cursor = monthStart; cursor.getTime() <= monthEnd.getTime(); cursor = addDays_(cursor, 1)) {
+    const schedule = getScheduleForDate_(context.schedules, employeeCode, cursor);
+    const daySchedule = getDaySchedule_(schedule, cursor);
+    if (!daySchedule.isScheduled) continue;
+    const eligible = employeeActiveOnDate_(employee, cursor) && !unpaidStatusByDate[formatDateKey_(cursor)];
+    if (!eligible) continue;
+    eligibleDays += 1;
+    if (cursor.getTime() >= periodStart.getTime() && cursor.getTime() <= periodEnd.getTime()) {
+      periodEligibleDays += 1;
+    }
+  }
+
+  if (!eligibleDays || !periodEligibleDays) {
+    return {
+      monthlyBenefit,
+      eligibleDays,
+      periodEligibleDays,
+      amount: 0,
+      notes: 'No benefit-eligible scheduled days in this pay period.'
+    };
+  }
+
+  const defaultSplit = eligibleDays === totalScheduledDays;
+  const amount = defaultSplit
+    ? monthlyBenefit / 2
+    : (monthlyBenefit * (eligibleDays / totalScheduledDays)) * (periodEligibleDays / eligibleDays);
+  return {
+    monthlyBenefit,
+    eligibleDays,
+    periodEligibleDays,
+    amount: round2_(amount),
+    notes: defaultSplit
+      ? 'Default 50/50 monthly benefit split applied.'
+      : `${eligibleDays} of ${totalScheduledDays} scheduled days benefit-eligible; ${periodEligibleDays} in this pay period.`
+  };
+}
+
+function isMidPayroll_(period) {
+  return String(period['Period Type (Mid / EOM)'] || '').toLowerCase() === 'mid';
+}
+
 function ensurePhase1TestPins_(attendance) {
   const sheet = getSheet_(attendance, CONFIG.attendanceTabs.employees);
   const values = sheet.getDataRange().getValues();
@@ -1814,7 +2146,7 @@ function formatWorkflowInstructionsSheet_(sheet, lastRow, workbookType) {
 
 function getAttendanceWorkflowGuide_() {
   return {
-    eyebrow: 'PHASE 1-2 OPERATING GUIDE',
+    eyebrow: 'PHASE 1-3 OPERATING GUIDE',
     title: 'Attendance Workflow Instructions',
     subtitle: 'Use this workbook to collect clock events, maintain schedules, and produce the reviewed attendance log that payroll consumes.',
     workbook: CONFIG.attendanceSpreadsheetName,
@@ -1884,7 +2216,7 @@ function getAttendanceWorkflowGuide_() {
 
 function getPayrollWorkflowGuide_() {
   return {
-    eyebrow: 'PHASE 1-2 OPERATING GUIDE',
+    eyebrow: 'PHASE 1-3 OPERATING GUIDE',
     title: 'Payroll Workflow Instructions',
     subtitle: 'Use this workbook to maintain private compensation data, calculate the pay period, and produce the payroll output for review.',
     workbook: CONFIG.payrollSpreadsheetName,
@@ -1892,7 +2224,7 @@ function getPayrollWorkflowGuide_() {
     entryPoint: 'Payroll menu',
     beforeUse: 'Confirm attendance has been rebuilt and compensation is complete.',
     cadence: 'Mid-month and end-of-month payroll',
-    scope: 'Base pay, deductions, attendance bonus, PA tracking',
+    scope: 'Base pay, deductions, benefits, bonuses, adjustments',
     sections: [
       {
         eyebrow: 'SECTION 01',
@@ -1903,10 +2235,11 @@ function getPayrollWorkflowGuide_() {
           ['1', 'Operations manager', 'Rebuild Attendance Log for the target period.', 'Attendance workbook', 'Before calculation', 'Attendance statuses and late minutes are current.'],
           ['2', 'Payroll processor', 'Review Compensation Master for blanks and effective dates.', 'Compensation Master', 'Before calculation', 'Every paid employee has an active compensation row.'],
           ['3', 'Payroll processor', 'Confirm or create the target pay period.', 'Pay Periods', 'Each run', 'Period ID, dates, type, and status are correct.'],
-          ['4', 'Payroll processor', 'Calculate the pay period.', 'Payroll menu', 'Each run', 'Payroll Calculations and Payroll Output are refreshed.'],
-          ['5', 'Payroll approver', 'Review warnings, bonus statuses, deductions, and Needs review rows.', 'Payroll Calculations', 'Before payment', 'Exceptions have notes or correction actions.'],
-          ['6', 'Payroll processor', 'Refresh quarterly PA tracking after quarter-end payrolls.', 'Payroll menu', 'Quarter close', 'Quarterly PA Tracker shows eligible employees and reasons.'],
-          ['7', 'Payroll processor', 'Finalize after approval.', 'Payroll menu', 'After approval', 'Pay Period status is Paid and output is ready for export.']
+          ['4', 'Payroll processor', 'Enter KPI approvals, additional bonuses, and adjustments.', 'Payroll menu', 'Before calculation', 'Bonuses & Adjustments has approved entries with descriptions.'],
+          ['5', 'Payroll processor', 'Calculate the pay period.', 'Payroll menu', 'Each run', 'Payroll Calculations and Payroll Output are refreshed.'],
+          ['6', 'Payroll approver', 'Review warnings, benefits, bonus statuses, deductions, and Needs review rows.', 'Payroll Calculations', 'Before payment', 'Exceptions have notes or correction actions.'],
+          ['7', 'Payroll processor', 'Refresh quarterly PA tracking after quarter-end payrolls.', 'Payroll menu', 'Quarter close', 'Quarterly PA Tracker shows eligible employees and reasons.'],
+          ['8', 'Payroll processor', 'Finalize after approval.', 'Payroll menu', 'After approval', 'Pay Period status is Paid and output is ready for export.']
         ]
       },
       {
@@ -1920,7 +2253,8 @@ function getPayrollWorkflowGuide_() {
           ['Payroll Calculations', 'Detailed calculated pay and deductions.', 'Payroll approver', 'Review only', 'Worked Hours, Deductions, Calculated Total', 'Investigate Needs review before payment.'],
           ['Payroll Output', 'Compact export-facing payroll summary.', 'Payroll processor', 'Review then export', 'Base, Deductions, TOTAL, Status', 'Export only after exceptions are cleared or approved.'],
           ['Employee Lifecycle Log', 'Hire, termination, and reactivation audit.', 'Payroll and operations', 'Yes', 'Event Type, Event Date, Effective Date', 'Capture lifecycle decisions that affect payroll timing.'],
-          ['Quarterly PA Tracker', 'Three-month perfect-attendance tracking.', 'Payroll processor', 'Script-updated', 'Quarter, month status, eligibility, bonus', 'Refresh after quarter-end attendance is complete.']
+          ['Quarterly PA Tracker', 'Three-month perfect-attendance tracking.', 'Payroll processor', 'Script-updated', 'Quarter, month status, eligibility, bonus', 'Refresh after quarter-end attendance is complete.'],
+          ['Bonuses & Adjustments', 'Approved KPI, bonuses, and adjustments.', 'Payroll processor', 'Append via dialogs', 'Type, description, amount, approver', 'Use menu dialogs so approval metadata is captured.']
         ]
       },
       {
@@ -1934,8 +2268,10 @@ function getPayrollWorkflowGuide_() {
           ['Absent deduction', 'Payroll Calculations', 'Absent Days > 0', 'Scheduled day has no clock-in.', 'Confirm absence classification before approval.', 'Payroll approver'],
           ['Late deduction', 'Payroll Calculations', 'Late Minutes > 0', 'Late start or late lunch return.', 'Review against policy and correct source events if needed.', 'Payroll approver'],
           ['Short hours deduction', 'Payroll Calculations', 'Short Hours > 0', 'Worked hours are below eight for a scheduled day.', 'Confirm early leave, correction, or override path.', 'Payroll approver'],
+          ['Benefits', 'Payroll Calculations', 'Benefits and Benefit Eligible Days', 'Mid-month starts, exits, UTO, or Non-PTO can prorate benefits.', 'Review proration notes before approval.', 'Payroll approver'],
           ['Attendance bonus', 'Payroll Calculations', 'Attendance Bonus Status', 'Monthly eligibility is calculated after month close on Mid payrolls.', 'Review the status and notes before approving output.', 'Payroll approver'],
-          ['Quarterly PA bonus', 'Quarterly PA Tracker', 'Eligible? = No or amount blank', 'One or more months were not perfect, or bonus amount is blank.', 'Review quarter details and Compensation Master.', 'Payroll processor']
+          ['Quarterly PA bonus', 'Quarterly PA Tracker', 'Eligible? = No or amount blank', 'One or more months were not perfect, or bonus amount is blank.', 'Review quarter details and Compensation Master.', 'Payroll processor'],
+          ['KPI and adjustments', 'Bonuses & Adjustments', 'Manual entries affect Payroll Output', 'A bonus or adjustment was approved outside attendance logic.', 'Confirm description, amount, and approver.', 'Payroll approver']
         ]
       },
       {
@@ -2001,6 +2337,7 @@ function buildPayrollContext_(attendance, payroll, periodStart, periodEnd) {
     schedules: readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules)),
     attendanceRows: readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.log)),
     compRows: readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp)),
+    bonusRows: readObjects_(getSheet_(payroll, CONFIG.payrollTabs.bonuses)),
     periodStart,
     periodEnd
   };
@@ -2076,18 +2413,32 @@ function calculateEmployeePay_(employeeCode, period, context) {
   const absenceDeduction = absentDays * 8 * hourlyBaseRate;
   const shortHoursDeduction = shortHours * hourlyBaseRate;
   const totalDeductions = lateDeduction + absenceDeduction + shortHoursDeduction;
+  const benefits = calculateBenefitsForPeriod_(code, employee, period, context, comp);
   const attendanceBonus = calculateMonthlyAttendanceBonus_(code, period, context, comp);
   const quarterlyPaBonus = calculateQuarterlyPaBonus_(code, period, context, comp);
+  const bonusAdjustments = summarizeBonusAdjustments_(context.bonusRows, period['Period ID'], code);
+  const isMidPayroll = isMidPayroll_(period);
   const attendanceBonusAmount = toNumberOrZero_(attendanceBonus.amount);
   const quarterlyPaAmount = toNumberOrZero_(quarterlyPaBonus.amount);
+  const kpiBonusAmount = isMidPayroll ? bonusAdjustments.kpi : 0;
+  const additionalBonusAmount = bonusAdjustments.additional;
+  const positiveAdjustmentAmount = bonusAdjustments.positive;
+  const negativeAdjustmentAmount = bonusAdjustments.negative;
+  const otherBonusAmount = quarterlyPaAmount + additionalBonusAmount;
+  const adjustmentAmount = positiveAdjustmentAmount - negativeAdjustmentAmount;
   const canPay = incompleteDays === 0;
-  const total = canPay ? scheduledBase - totalDeductions + attendanceBonusAmount + quarterlyPaAmount : '';
+  const total = canPay
+    ? scheduledBase - totalDeductions + toNumberOrZero_(benefits.amount) + attendanceBonusAmount + quarterlyPaAmount + kpiBonusAmount + additionalBonusAmount + positiveAdjustmentAmount - negativeAdjustmentAmount
+    : '';
   const notes = [];
   if (absentDays) notes.push(`${absentDays} absent day(s).`);
   if (incompleteDays) notes.push(`${incompleteDays} incomplete day(s); verify clock events before payment.`);
   if (!scheduledDays) notes.push('No scheduled days in this pay period.');
+  if (benefits.notes) notes.push(`Benefits: ${benefits.notes}`);
   if (attendanceBonus.status !== 'Not due') notes.push(`Attendance bonus ${attendanceBonus.status}: ${attendanceBonus.notes}`);
   if (quarterlyPaBonus.status !== 'Not due') notes.push(`Quarterly PA ${quarterlyPaBonus.status}: ${quarterlyPaBonus.notes}`);
+  if (bonusAdjustments.kpi && !isMidPayroll) notes.push('KPI bonus entries exist but are not paid on EOM payrolls.');
+  if (bonusAdjustments.notes.length) notes.push(`Bonuses/adjustments: ${bonusAdjustments.notes.join(' | ')}`);
 
   const calculationRow = [
     period['Period ID'],
@@ -2109,12 +2460,20 @@ function calculateEmployeePay_(employeeCode, period, context) {
     round2_(shortHoursDeduction),
     round2_(scheduledBase),
     round2_(totalDeductions),
+    benefits.monthlyBenefit === '' ? '' : round2_(benefits.monthlyBenefit),
+    benefits.eligibleDays,
+    benefits.periodEligibleDays,
+    benefits.amount === '' ? '' : round2_(benefits.amount),
     attendanceBonus.amount === '' ? '' : round2_(attendanceBonus.amount),
     attendanceBonus.status,
     attendanceBonus.notes,
     quarterlyPaBonus.amount === '' ? '' : round2_(quarterlyPaBonus.amount),
     quarterlyPaBonus.status,
     quarterlyPaBonus.notes,
+    round2_(kpiBonusAmount),
+    round2_(additionalBonusAmount),
+    round2_(positiveAdjustmentAmount),
+    round2_(negativeAdjustmentAmount),
     total === '' ? '' : round2_(total),
     canPay ? 'Calculated' : 'Needs review',
     notes.join(' ')
@@ -2125,11 +2484,11 @@ function calculateEmployeePay_(employeeCode, period, context) {
     periodLabel,
     round2_(scheduledBase),
     round2_(totalDeductions),
-    '',
+    benefits.amount === '' ? '' : round2_(benefits.amount),
     attendanceBonus.amount === '' ? '' : round2_(attendanceBonus.amount),
-    '',
-    quarterlyPaBonus.amount === '' ? '' : round2_(quarterlyPaBonus.amount),
-    '',
+    round2_(kpiBonusAmount),
+    round2_(otherBonusAmount),
+    round2_(adjustmentAmount),
     total === '' ? '' : round2_(total),
     canPay ? 'Calculated' : 'Needs review',
     notes.join(' ')
@@ -2147,37 +2506,19 @@ function blankPayrollResult_(period, employeeCode, employeeName, status, note) {
   const periodStart = parseDateOrBlank_(period['Period Start']);
   const periodEnd = parseDateOrBlank_(period['Period End']);
   const periodLabel = `${period['Period ID']} (${displayDate_(periodStart)} - ${displayDate_(periodEnd)})`;
+  const calculationRow = [
+    period['Period ID'],
+    employeeCode,
+    employeeName,
+    periodStart || '',
+    periodEnd || ''
+  ];
+  while (calculationRow.length < HEADERS.calculations.length - 2) {
+    calculationRow.push('');
+  }
+  calculationRow.push(status, note);
   return {
-    calculationRow: [
-      period['Period ID'],
-      employeeCode,
-      employeeName,
-      periodStart || '',
-      periodEnd || '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      status,
-      note
-    ],
+    calculationRow,
     outputRow: [employeeName, periodLabel, '', '', '', '', '', '', '', '', status, note],
     warning: `${employeeName}: ${note}`
   };
@@ -2249,9 +2590,11 @@ function applyPayrollFormatting_(ss) {
   setupSheetFormatting_(getSheet_(ss, CONFIG.payrollTabs.output), HEADERS.output.length);
   setupSheetFormatting_(getSheet_(ss, CONFIG.payrollTabs.lifecycle), HEADERS.lifecycle.length);
   setupSheetFormatting_(getSheet_(ss, CONFIG.payrollTabs.paTracker), HEADERS.paTracker.length);
+  setupSheetFormatting_(getSheet_(ss, CONFIG.payrollTabs.bonuses), HEADERS.bonuses.length);
 
   setValidation_(getSheet_(ss, CONFIG.payrollTabs.periods), 5, ['Mid', 'EOM']);
   setValidation_(getSheet_(ss, CONFIG.payrollTabs.periods), 6, ['Open', 'Calculated', 'Paid']);
+  setValidation_(getSheet_(ss, CONFIG.payrollTabs.bonuses), 3, ['KPI', 'Additional', 'Positive Adj', 'Negative Adj']);
   getSheet_(ss, CONFIG.payrollTabs.comp).getRange('B:C').setNumberFormat('yyyy-mm-dd');
   getSheet_(ss, CONFIG.payrollTabs.comp).getRange('E:I').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.periods).getRange('B:D').setNumberFormat('yyyy-mm-dd');
@@ -2260,12 +2603,15 @@ function applyPayrollFormatting_(ss) {
   getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('M:M').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('O:O').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('Q:T').setNumberFormat('$#,##0.00');
-  getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('W:W').setNumberFormat('$#,##0.00');
-  getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('Z:Z').setNumberFormat('$#,##0.00');
+  getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('W:X').setNumberFormat('$#,##0.00');
+  getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('AA:AA').setNumberFormat('$#,##0.00');
+  getSheet_(ss, CONFIG.payrollTabs.calculations).getRange('AD:AH').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.output).getRange('C:J').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.lifecycle).getRange('D:E').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
   getSheet_(ss, CONFIG.payrollTabs.paTracker).getRange('L:L').setNumberFormat('$#,##0.00');
   getSheet_(ss, CONFIG.payrollTabs.paTracker).getRange('N:N').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
+  getSheet_(ss, CONFIG.payrollTabs.bonuses).getRange('E:E').setNumberFormat('$#,##0.00');
+  getSheet_(ss, CONFIG.payrollTabs.bonuses).getRange('G:G').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
   applySpreadsheetChrome_(ss, 'payroll');
 }
 
@@ -2318,6 +2664,7 @@ function setValidation_(sheet, column, values) {
 function ensureSheet_(ss, name, headers) {
   let sheet = ss.getSheetByName(name);
   if (!sheet) sheet = ss.insertSheet(name);
+  ensureMinimumSheetSize_(sheet, 1, headers.length);
   const existing = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
   const needsHeader = existing.join('') === '' || existing.join('|') !== headers.join('|');
   if (needsHeader) {
