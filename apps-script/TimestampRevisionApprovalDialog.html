@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        color-scheme: light;
+        --bg-foundation: #F7F1EB;
+        --surface-card: #FBF7F1;
+        --surface-inset: #EFE8DD;
+        --ink-primary: #2A2725;
+        --ink-body: #4A4540;
+        --ink-muted: #8A8178;
+        --rule: #D4CFC4;
+        --accent: #E91D79;
+        --serif: 'Cormorant Garamond', Georgia, serif;
+        --sans: 'Inter', system-ui, -apple-system, sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg-foundation);
+        color: var(--ink-body);
+        font: 14px/1.5 var(--sans);
+        -webkit-font-smoothing: antialiased;
+      }
+      form { padding: 28px 28px 0; }
+      h2 {
+        margin: 0;
+        color: var(--ink-primary);
+        font-family: var(--serif);
+        font-size: 26px;
+        font-weight: 400;
+        line-height: 1.12;
+      }
+      .eyebrow,
+      label,
+      button,
+      th,
+      .code,
+      .meta {
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      .eyebrow,
+      label,
+      th,
+      .code,
+      .meta {
+        color: var(--ink-muted);
+      }
+      .section-head {
+        margin-bottom: 18px;
+        padding-bottom: 16px;
+        border-bottom: 1px solid var(--rule);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 14px;
+      }
+      th,
+      td {
+        padding: 11px 9px;
+        border-bottom: 1px solid var(--rule);
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        border-top: 1px solid var(--rule);
+        background: var(--surface-inset);
+      }
+      td {
+        font-variant-numeric: tabular-nums;
+      }
+      select,
+      textarea {
+        width: 100%;
+        min-height: 36px;
+        border: 0;
+        border-bottom: 1px solid var(--rule);
+        border-radius: 0;
+        padding: 6px 2px;
+        background: transparent;
+        color: var(--ink-primary);
+        font: inherit;
+        font-size: 14px;
+        appearance: none;
+        -webkit-appearance: none;
+      }
+      textarea {
+        min-height: 62px;
+        resize: vertical;
+      }
+      select:focus,
+      textarea:focus {
+        outline: none;
+        border-bottom: 2px solid var(--accent);
+        padding-bottom: 5px;
+      }
+      .code {
+        display: block;
+        margin-top: 2px;
+      }
+      .reason {
+        max-width: 260px;
+      }
+      .context {
+        color: var(--ink-muted);
+        font-size: 12px;
+      }
+      .empty {
+        margin: 18px 0 0;
+        padding: 18px;
+        background: var(--surface-inset);
+        border: 1px solid var(--rule);
+        color: var(--ink-muted);
+      }
+      .status {
+        min-height: 22px;
+        margin: 18px 0 0;
+        color: var(--ink-muted);
+        font-size: 13px;
+      }
+      .error { color: var(--accent); }
+      .actions {
+        position: sticky;
+        bottom: 0;
+        display: flex;
+        justify-content: flex-end;
+        gap: 12px;
+        margin: 28px -28px 0;
+        padding: 18px 28px;
+        border-top: 2px solid var(--accent);
+        background: var(--bg-foundation);
+      }
+      button {
+        min-height: 42px;
+        padding: 0 22px;
+        border: 1px solid var(--ink-primary);
+        border-radius: 0;
+        background: transparent;
+        color: var(--ink-primary);
+        font-family: var(--sans);
+        cursor: pointer;
+      }
+      button:hover:not(:disabled),
+      button.primary {
+        background: var(--ink-primary);
+        color: var(--bg-foundation);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+    </style>
+  </head>
+  <body>
+    <form onsubmit="submitForm(event)">
+      <div class="section-head">
+        <p class="eyebrow">Payroll Approval</p>
+        <h2>Timestamp Revisions</h2>
+        <p id="meta" class="meta"></p>
+      </div>
+
+      <div id="content">
+        <p class="empty">Loading timestamp revisions...</p>
+      </div>
+
+      <p id="status" class="status">Loading...</p>
+
+      <div class="actions">
+        <button type="button" onclick="google.script.host.close()">Cancel</button>
+        <button id="saveButton" class="primary" type="submit">Save Decisions</button>
+      </div>
+    </form>
+
+    <script>
+      let requests = [];
+
+      function init() {
+        google.script.run
+          .withSuccessHandler(render)
+          .withFailureHandler(showError)
+          .getTimestampRevisionApprovalData();
+      }
+
+      function render(data) {
+        requests = data.requests || [];
+        document.getElementById('meta').textContent = data.requestedAt ? `Loaded ${data.requestedAt}` : '';
+        if (!requests.length) {
+          document.getElementById('content').innerHTML = '<p class="empty">No pending timestamp revision requests.</p>';
+          setStatus('Ready.');
+          return;
+        }
+        document.getElementById('content').innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>Employee</th>
+                <th>Work Date</th>
+                <th>Event</th>
+                <th>Original</th>
+                <th>Requested</th>
+                <th>Reason</th>
+                <th>Decision</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${requests.map(renderRow).join('')}
+            </tbody>
+          </table>
+        `;
+        setStatus('Ready.');
+      }
+
+      function renderRow(row, index) {
+        return `
+          <tr>
+            <td>
+              ${escapeHtml(row.employee)}
+              <span class="code">${escapeHtml(row.employeeCode)}</span>
+            </td>
+            <td>${escapeHtml(row.workDate)}</td>
+            <td>${escapeHtml(row.eventLabel)}</td>
+            <td>
+              ${escapeHtml(row.originalTimestamp || 'Missing / no original')}
+              ${row.originalEventId ? `<span class="code">${escapeHtml(row.originalEventId)}</span>` : ''}
+            </td>
+            <td>${escapeHtml(row.requestedTimestamp)}</td>
+            <td class="reason">
+              ${escapeHtml(row.reason)}
+              <p class="context">${escapeHtml(row.issueContext || '')}</p>
+            </td>
+            <td>
+              <select id="decision-${index}">
+                <option value="Keep">Keep Pending</option>
+                <option value="Approved">Approve</option>
+                <option value="Denied">Deny</option>
+              </select>
+            </td>
+            <td><textarea id="notes-${index}" placeholder="Optional"></textarea></td>
+          </tr>
+        `;
+      }
+
+      function submitForm(event) {
+        event.preventDefault();
+        const decisions = requests.map((row, index) => ({
+          requestId: row.requestId,
+          decision: value(`decision-${index}`),
+          notes: value(`notes-${index}`)
+        })).filter(row => row.decision && row.decision !== 'Keep');
+
+        if (!decisions.length) {
+          setStatus('Choose at least one approval or denial.', true);
+          return;
+        }
+        document.getElementById('saveButton').disabled = true;
+        setStatus('Saving decisions...');
+        google.script.run
+          .withSuccessHandler(result => {
+            setStatus(result.message || 'Decisions saved.');
+            init();
+            document.getElementById('saveButton').disabled = false;
+          })
+          .withFailureHandler(error => {
+            showError(error);
+            document.getElementById('saveButton').disabled = false;
+          })
+          .processTimestampRevisionRequests({ decisions });
+      }
+
+      function value(id) {
+        const node = document.getElementById(id);
+        return node ? node.value.trim() : '';
+      }
+
+      function setStatus(message, isError) {
+        const node = document.getElementById('status');
+        node.textContent = message || '';
+        node.className = isError ? 'status error' : 'status';
+      }
+
+      function showError(error) {
+        setStatus(error && error.message ? error.message : String(error), true);
+      }
+
+      function escapeHtml(value) {
+        return String(value == null ? '' : value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      init();
+    </script>
+  </body>
+</html>

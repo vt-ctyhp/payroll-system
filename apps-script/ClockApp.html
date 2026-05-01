@@ -30,7 +30,7 @@
         -webkit-font-smoothing: antialiased;
       }
       main {
-        width: min(460px, 100%);
+        width: min(720px, 100%);
         min-height: 100vh;
         margin: 0 auto;
         padding: 32px 20px 48px;
@@ -199,7 +199,7 @@
       }
       .utility-grid {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(3, 1fr);
         gap: 10px;
         margin-top: 18px;
       }
@@ -215,6 +215,134 @@
         font-size: 12px;
         font-variant-numeric: tabular-nums;
       }
+      .metric-strip {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        border-top: 1px solid var(--rule);
+        border-bottom: 1px solid var(--rule);
+        margin: 18px 0 0;
+      }
+      .metric {
+        padding: 14px 12px;
+        border-right: 1px solid var(--rule);
+      }
+      .metric:last-child { border-right: 0; }
+      .metric .label {
+        color: var(--ink-muted);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .metric .value {
+        margin-top: 4px;
+        color: var(--ink-primary);
+        font-family: var(--serif);
+        font-size: 24px;
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+      }
+      .segmented {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0;
+        border: 1px solid var(--ink-primary);
+        margin-top: 22px;
+      }
+      .segmented button {
+        min-height: 42px;
+        border-right: 1px solid var(--ink-primary);
+        background: transparent;
+        color: var(--ink-primary);
+      }
+      .segmented button:last-child { border-right: 0; }
+      .segmented button.active {
+        background: var(--ink-primary);
+        color: var(--bg-foundation);
+      }
+      .timesheet-list {
+        margin-top: 22px;
+        border-top: 1px solid var(--rule);
+      }
+      .timesheet-row {
+        padding: 18px 0;
+        border-bottom: 1px solid var(--rule);
+      }
+      .timesheet-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        align-items: baseline;
+      }
+      .timesheet-date {
+        margin: 0;
+        color: var(--ink-primary);
+        font-family: var(--serif);
+        font-size: 22px;
+        line-height: 1.1;
+      }
+      .timesheet-status {
+        color: var(--ink-muted);
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        text-align: right;
+      }
+      .timestamp-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px 18px;
+        margin-top: 14px;
+      }
+      .timestamp .label {
+        color: var(--ink-muted);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .timestamp .value {
+        margin-top: 3px;
+        color: var(--ink-primary);
+        font-variant-numeric: tabular-nums;
+      }
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+      }
+      .chip {
+        border: 1px solid var(--rule);
+        padding: 5px 8px;
+        color: var(--ink-muted);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .chip.issue {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      .row-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 14px;
+      }
+      .compact {
+        width: auto;
+        min-height: 36px;
+        padding: 0 14px;
+        font-size: 10px;
+      }
+      .revision-form {
+        margin-top: 18px;
+        padding: 18px;
+        background: var(--surface-inset);
+        border-top: 1px solid var(--accent);
+      }
       .form-actions {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -226,10 +354,26 @@
         color: var(--ink-muted);
         font-size: 13px;
       }
+      .empty {
+        margin: 18px 0 0;
+        padding: 18px;
+        background: var(--surface-inset);
+        border: 1px solid var(--rule);
+        color: var(--ink-muted);
+      }
       @media (max-width: 420px) {
         .utility-grid,
-        .form-actions {
+        .form-actions,
+        .metric-strip,
+        .timestamp-grid {
           grid-template-columns: 1fr;
+        }
+        .timesheet-head {
+          display: block;
+        }
+        .timesheet-status {
+          margin-top: 6px;
+          text-align: left;
         }
       }
 
@@ -271,6 +415,8 @@
     <script>
       const STORAGE_KEY = 'payrollClockIdentity';
       let latestState = null;
+      let latestReview = null;
+      let latestReviewMode = 'currentPeriod';
       let activeView = 'clock';
 
       function getIdentity() {
@@ -311,6 +457,7 @@
         )).join('');
         const summary = state.todaySummary.map(item => `<li>${escapeHtml(item)}</li>`).join('');
         const balance = renderBalanceLine(state.ptoBalance);
+        const timesheetSummary = renderTimesheetSummaryLine(state.timesheetSummary);
 
         document.getElementById('app').innerHTML = `
           <p class="eyebrow">Time &amp; Attendance</p>
@@ -323,8 +470,10 @@
           <div class="utility-grid">
             <button type="button" class="secondary" onclick="showTimeOffForm()">Request Time Off</button>
             <button type="button" class="secondary" onclick="showMakeupForm()">Makeup Hours</button>
+            <button type="button" class="secondary" onclick="showTimesheetReview('currentPeriod')">Review Timesheet</button>
           </div>
           ${balance}
+          ${timesheetSummary}
           <hr class="rule">
           <p class="summary-heading">Today so far</p>
           <ul class="summary">${summary}</ul>
@@ -429,6 +578,164 @@
         `;
       }
 
+      function showTimesheetReview(viewMode) {
+        if (!latestState || !latestState.authenticated) return;
+        activeView = 'timesheet';
+        latestReviewMode = viewMode === 'recent' ? 'recent' : 'currentPeriod';
+        document.getElementById('app').innerHTML = `
+          <p class="eyebrow">Timesheet Review</p>
+          <h1>Review Timesheet</h1>
+          <p class="loading">Loading timesheet</p>
+          <p id="status" class="status"></p>
+        `;
+        google.script.run
+          .withSuccessHandler(renderTimesheetReview)
+          .withFailureHandler(showError)
+          .getEmployeeTimesheetReview(getIdentity(), latestReviewMode);
+      }
+
+      function renderTimesheetReview(data) {
+        activeView = 'timesheet';
+        latestReview = data;
+        latestReviewMode = data.viewMode || latestReviewMode;
+        const rows = (data.rows || []).map((row, index) => renderTimesheetRow(row, index)).join('');
+        const counts = data.counts || { openIssues: 0, pendingRevisions: 0, total: 0 };
+        const currentActive = latestReviewMode === 'currentPeriod' ? 'active' : '';
+        const recentActive = latestReviewMode === 'recent' ? 'active' : '';
+        document.getElementById('app').innerHTML = `
+          <p class="eyebrow">Timesheet Review</p>
+          <h1>${escapeHtml(data.employee ? data.employee.displayName : 'Review Timesheet')}</h1>
+          <p class="request-note">${escapeHtml((data.selectedWindow && data.selectedWindow.label) || '')}</p>
+          <div class="metric-strip">
+            <div class="metric"><div class="label">Open Issues</div><div class="value">${escapeHtml(counts.openIssues || 0)}</div></div>
+            <div class="metric"><div class="label">Pending Revisions</div><div class="value">${escapeHtml(counts.pendingRevisions || 0)}</div></div>
+            <div class="metric"><div class="label">Total Flags</div><div class="value">${escapeHtml(counts.total || 0)}</div></div>
+          </div>
+          <div class="segmented">
+            <button type="button" class="${currentActive}" onclick="showTimesheetReview('currentPeriod')">Current Period</button>
+            <button type="button" class="${recentActive}" onclick="showTimesheetReview('recent')">Recent</button>
+          </div>
+          <div class="timesheet-list">${rows || '<p class="empty">No timesheet rows in this window.</p>'}</div>
+          <div id="revisionFormHost"></div>
+          <p id="status" class="status"></p>
+          <button type="button" class="secondary" onclick="backToClock()">Back to Clock</button>
+        `;
+      }
+
+      function renderTimesheetRow(row, index) {
+        const issues = row.issues || [];
+        const chips = issues.length
+          ? issues.map(issue => `<span class="chip ${issue.isRevision ? '' : 'issue'}">${escapeHtml(issue.label)}</span>`).join('')
+          : '<span class="chip">No flags</span>';
+        const revision = row.revisionStatus ? `<span class="chip">${escapeHtml(row.revisionStatus)}</span>` : '';
+        return `
+          <article class="timesheet-row">
+            <div class="timesheet-head">
+              <div>
+                <p class="timesheet-date">${escapeHtml(row.dateLabel || row.date)}</p>
+                <p class="request-note">${escapeHtml(row.schedule || '')}</p>
+              </div>
+              <div class="timesheet-status">${escapeHtml(row.status || 'No status')}</div>
+            </div>
+            <div class="timestamp-grid">
+              ${renderTimestampCell('Clock In', row.clockIn)}
+              ${renderTimestampCell('Lunch Start', row.lunchStart)}
+              ${renderTimestampCell('Lunch End', row.lunchEnd)}
+              ${renderTimestampCell('Clock Out', row.clockOut)}
+              ${renderTimestampCell('Worked', row.workedHours === '' ? '' : `${row.workedHours}h`)}
+              ${renderTimestampCell('Late', row.lateMinutes === '' ? '' : `${row.lateMinutes}m`)}
+              ${renderTimestampCell('Break 1', [row.break1Start, row.break1End].filter(Boolean).join(' - '))}
+              ${renderTimestampCell('Break 2', [row.break2Start, row.break2End].filter(Boolean).join(' - '))}
+            </div>
+            <div class="chips">${chips}${revision}</div>
+            <div class="row-actions">
+              <button type="button" class="secondary compact" onclick="showRevisionForm(${index})">Request Revision</button>
+            </div>
+          </article>
+        `;
+      }
+
+      function renderTimestampCell(label, value) {
+        return `
+          <div class="timestamp">
+            <div class="label">${escapeHtml(label)}</div>
+            <div class="value">${escapeHtml(value || 'blank')}</div>
+          </div>
+        `;
+      }
+
+      function showRevisionForm(rowIndex) {
+        if (!latestReview || !latestReview.rows || !latestReview.rows[rowIndex]) return;
+        const row = latestReview.rows[rowIndex];
+        const selectedType = row.suggestedEventType || 'CLOCK_IN';
+        const typeOptions = (latestReview.eventTypes || [])
+          .map(item => `<option value="${escapeAttr(item.type)}" ${item.type === selectedType ? 'selected' : ''}>${escapeHtml(item.label)}</option>`)
+          .join('');
+        const eventOptions = renderOriginalEventOptions(row.events || []);
+        document.getElementById('revisionFormHost').innerHTML = `
+          <div class="revision-form">
+            <p class="eyebrow">Timestamp Revision</p>
+            <h1>${escapeHtml(row.dateLabel || row.date)}</h1>
+            <input id="revisionDate" type="hidden" value="${escapeAttr(row.date)}">
+            <label for="revisionType">Event Type</label>
+            <select id="revisionType">${typeOptions}</select>
+            <label for="originalEventId">Original Event</label>
+            <select id="originalEventId">${eventOptions}</select>
+            <label for="requestedTime">Requested Timestamp</label>
+            <input id="requestedTime" placeholder="09:00am" inputmode="text">
+            <label for="revisionReason">Reason</label>
+            <textarea id="revisionReason"></textarea>
+            <div class="form-actions">
+              <button type="button" class="secondary" onclick="clearRevisionForm()">Cancel</button>
+              <button id="submitRequestButton" type="button" onclick="submitTimestampRevisionRequest()">Submit</button>
+            </div>
+          </div>
+        `;
+        document.getElementById('revisionFormHost').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+
+      function renderOriginalEventOptions(events) {
+        const rows = ['<option value="">Missing timestamp / no original event</option>'];
+        events.forEach(event => {
+          const label = `${event.eventLabel || event.eventType} ${event.timeLabel || event.timestamp}`;
+          rows.push(`<option value="${escapeAttr(event.eventId)}">${escapeHtml(label)}</option>`);
+        });
+        return rows.join('');
+      }
+
+      function clearRevisionForm() {
+        const host = document.getElementById('revisionFormHost');
+        if (host) host.innerHTML = '';
+      }
+
+      function submitTimestampRevisionRequest() {
+        const payload = {
+          identity: getIdentity(),
+          workDate: value('revisionDate'),
+          eventType: value('revisionType'),
+          originalEventId: value('originalEventId'),
+          requestedTime: value('requestedTime'),
+          reason: value('revisionReason')
+        };
+        if (!payload.workDate || !payload.eventType || !payload.requestedTime || !payload.reason) {
+          setStatus('Complete every revision field before submitting.', true);
+          return;
+        }
+        setRequestBusy(true);
+        setStatus('Submitting revision...');
+        google.script.run
+          .withSuccessHandler(result => {
+            setStatus(result.message || 'Revision submitted.');
+            setRequestBusy(false);
+            showTimesheetReview(latestReviewMode);
+          })
+          .withFailureHandler(error => {
+            showError(error);
+            setRequestBusy(false);
+          })
+          .submitTimestampRevisionRequest(payload);
+      }
+
       function submitTimeOffRequest() {
         const payload = {
           identity: getIdentity(),
@@ -519,6 +826,14 @@
         const pto = formatBalance(balance.remainingPto);
         const nonPto = formatBalance(balance.remainingNonPto);
         return `<p class="balance-line">Current year balance: ${escapeHtml(plan)} PTO earned ${escapeHtml(earned)}, remaining ${escapeHtml(pto)} | Non-PTO ${escapeHtml(nonPto)}</p>`;
+      }
+
+      function renderTimesheetSummaryLine(summary) {
+        if (!summary) return '';
+        if (summary.unavailable) {
+          return `<p class="balance-line">${escapeHtml(summary.message || 'Timesheet review unavailable.')}</p>`;
+        }
+        return `<p class="balance-line">Timesheet review: ${escapeHtml(summary.openIssues || 0)} open issue(s), ${escapeHtml(summary.pendingRevisions || 0)} pending revision(s).</p>`;
       }
 
       function formatBalance(value) {

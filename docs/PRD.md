@@ -3,12 +3,13 @@
 **Project:** Internal payroll & attendance system, built in Google Sheets + Apps Script
 **Owner:** [Your name]
 **Status:** Draft v2
-**Last updated:** 2026-04-30
+**Last updated:** 2026-05-01
 
 > **Changes from v1:**
 > - Phase 1 attendance tracking is now an employee-facing self-service **web app** (Apps Script HtmlService) with real auto-timestamps. Assistants do NOT log attendance.
 > - Added §10 Employee Lifecycle (Add / Offboard / Reactivate) with full history preservation.
 > - Phase 1 now includes a basic Add Employee dialog. Phase 5 now includes the full Offboard + Reactivate flow with auto-Final-Payroll.
+> - Employee portal now includes Timesheet Review with current-period and recent views, plus append-only timestamp revision requests requiring payroll approval.
 
 ---
 
@@ -84,6 +85,7 @@ We are moving **off Jibble entirely** and building a self-contained Google Sheet
 │  - Attendance Log (derived)      │         │  - Compensation Change Log       │
 │  - PTO/UTO requests & balances   │         │  - Employee Lifecycle Log        │
 │  - Makeup hour requests          │         │  - Performance Reviews           │
+│  - Timestamp Revision Requests   │         │                                  │
 │  - Scorecard (attendance only)   │         │                                  │
 └──────────────────────────────────┘         └──────────────────────────────────┘
 ```
@@ -154,6 +156,8 @@ Each phase is independently deployable. Do not start the next phase until the cu
 - Approval workflow (manager approves before it counts in payroll calculations)
 - Approved time off automatically reflected in Attendance Log + payroll
 - Holidays tab integration (paid holidays count as present for attendance bonus)
+- Employee portal timesheet review defaults to the current pay period and offers a Recent view for the last 14 calendar days
+- Employees can request timestamp revisions from the portal; pending requests never affect Attendance Log or payroll until payroll processor approval
 
 ### Phase 5 — Compensation changes + full employee lifecycle
 - Compensation Change dialog (Payroll Sheet menu only)
@@ -190,6 +194,7 @@ Each phase is independently deployable. Do not start the next phase until the cu
 | Email | string | Used to identify them in the web app |
 | Web App PIN | string | Optional simple PIN for clock-in identification (see §6) |
 | Notes | string | |
+| Department | enum | `Operations`, `HR`, `Marketing`, `Advertising`; set during onboarding and left stable unless corrected by an admin |
 
 #### Tab: `Work Schedules` (structured, effective-dated)
 
@@ -199,7 +204,7 @@ One row per employee per schedule period. When a schedule changes, append a new 
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 
 - Blank start/end = not scheduled that day
-- Times stored as 24-hour decimals (10:00 AM = `10.00`, 7:00 PM = `19.00`)
+- Times display as `HH:MMam/pm`, e.g., `10:00am` and `07:00pm`
 - `Effective To` blank = currently active
 
 #### Tab: `Holidays`
@@ -213,13 +218,14 @@ Paid holidays count as "present" for attendance bonus eligibility.
 
 The web app writes one row here per button press. This is the source of truth for everything attendance-related.
 
-| Event ID | Timestamp | Employee Code | Event Type | Source | IP / Device | Notes |
-|---|---|---|---|---|---|---|
+| Event ID | Timestamp | Employee Code | Event Type | Source | IP / Device | Notes | Revision Request ID | Corrects Event ID |
+|---|---|---|---|---|---|---|---|---|
 
 - **Event Type** is one of: `CLOCK_IN`, `LUNCH_START`, `LUNCH_END`, `BREAK_START`, `BREAK_END`, `CLOCK_OUT`
 - **Source** is `WEB_APP` (default), `MANUAL` (admin entered/corrected), or `IMPORTED` (one-time backfill)
 - Manager can append manual rows for forgotten clock-outs; the Source flag makes corrections obvious in audit
 - Append-only by policy; corrections are made by adding a `MANUAL` event with a Notes explanation, never by editing original rows
+- Payroll-approved timestamp revision corrections store `Revision Request ID`; when `Corrects Event ID` is present, Attendance Log rebuild uses the correction instead of the original event
 
 #### Tab: `Attendance Log` (derived view, one row per employee per day)
 
@@ -252,6 +258,16 @@ For `Accrued Monthly`, `Earned PTO = Monthly PTO Accrual Days × completed full 
 
 | Request ID | Employee Code | Date | Hours Requested | Reason | Status | Approved By | Approved At |
 |---|---|---|---|---|---|---|---|
+
+#### Tab: `Timestamp Revision Requests` (Phase 4)
+
+| Request ID | Employee Code | Work Date | Event Type | Original Event ID | Original Timestamp | Requested Timestamp | Reason | Status (Pending/Approved/Denied) | Requested At | Reviewed By | Reviewed At | Review Notes | Correction Event ID |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+
+- Employees submit requests from the portal timesheet review.
+- Pending requests do not alter Clock Events, Attendance Log, or payroll.
+- Approved requests append a `MANUAL` Clock Event; original Clock Events are never edited or deleted.
+- Denied requests remain on the tab for audit.
 
 #### Tab: `Scorecard` (Phase 2)
 
@@ -375,14 +391,27 @@ The script tracks each employee's current state by reading their last Clock Even
 
 Disallowed buttons are greyed out. This prevents accidental double-clocks and out-of-order events.
 
-### 6.4 Edge cases
+### 6.4 Timesheet Review
+
+The portal includes `Review Timesheet`:
+
+- Default view: current pay period.
+- Recent view: last 14 calendar days, including today.
+- Attendance card count: open timesheet issues plus pending timestamp revision requests across the current pay period and the recent 14-day window.
+- Rows show date, schedule, clock/lunch/break/clock-out timestamps, worked hours, late minutes, status, issue chips, and revision status.
+- Flagged concerns include missing clock-in, missing clock-out, missing lunch pair, late minutes, short hours, absent/incomplete status, and pending revision request.
+- Employees can request a timestamp revision with event type, original event if applicable, requested timestamp in `HH:MMam/pm`, and reason.
+- Payroll processor approval is required before any requested correction affects attendance or payroll.
+
+### 6.5 Edge cases
 
 - **Forgot to clock out:** Manager edits the day in Attendance Log, OR adds a `MANUAL` Clock Event with a Notes explanation. The Attendance Log rebuilds from Clock Events on every payroll calculation, so the correction flows through.
+- **Employee notices a wrong timestamp:** Employee submits a timestamp revision request in the portal. Payroll approves or denies it from Payroll > Approve Timestamp Revisions. If approved, the script appends a correction event and rebuilds the affected day.
 - **Clocked into wrong day (timezone):** All timestamps stored in employee local time per the Work Schedule. Apps Script default timezone is set on the Spreadsheet at setup.
 - **Web app down / outage:** Employees can submit times to the manager who manually adds `MANUAL` Clock Events.
 - **Multiple devices:** Same Google account works across devices. State is read fresh from Clock Events on every page load, so the buttons reflect reality regardless of device.
 
-### 6.5 Web app deployment
+### 6.6 Web app deployment
 
 - Deploy as "Execute as: Me (the script owner)" so the script can write to the Attendance Sheet regardless of which employee is using it
 - Access set to "Anyone with Google account" — employee identification is via their authenticated email
@@ -525,6 +554,7 @@ USD throughout. Internal calculations carry full precision. Display values round
   ├── Calculate Pay Period…               [Phase 1]
   ├── Refresh Attendance Data
   ├── Enter KPI Bonuses for Period…       [Phase 3]
+  ├── Approve Timestamp Revisions…        [Phase 4, payroll only]
   ├── Enter Additional Bonus…             [Phase 3]
   ├── Enter Adjustment…                   [Phase 3]
   ├── Finalize & Mark as Paid
@@ -547,9 +577,10 @@ USD throughout. Internal calculations carry full precision. Display values round
 - Checkbox list: select employees (defaults to all active)
 - Button: "Calculate" → runs script, populates Payroll Calculations + Payroll Output
 - Warns if attendance data is incomplete (any scheduled day with no Clock Events and no approved time off)
+- Marks employee rows `Needs review` if pending timestamp revision requests exist in the calculated period
 
 **Add New Employee dialog (Phase 1):**
-- Fields: Full Name, Display Name, Employee Code (auto-suggested from name), Email, Position, Manager, Start Date
+- Fields: Full Name, Display Name, Employee Code (auto-suggested from name), Email, Position, Manager, Department, Start Date
 - Work schedule grid: checkbox per weekday with start/end time inputs, plus scheduled lunch
 - Compensation fields (only visible to payroll processor — assistants get a simpler form): Monthly Base, Benefits, Attendance Bonus, KPI Max, Quarterly PA, Annual PTO Days, Annual Non-PTO Days, PTO Plan Type, Monthly PTO Accrual Days
 - Save → creates rows in Employees + Work Schedules (Attendance Sheet) AND Compensation Master (Payroll Sheet) AND logs to Employee Lifecycle Log
@@ -559,6 +590,12 @@ USD throughout. Internal calculations carry full precision. Display values round
 - Dropdown: select pay period
 - Table: one row per active employee with columns: Name | KPI Max | Approved % | Approved Amount (auto) | Notes
 - Save → writes to Bonuses & Adjustments tab
+
+**Timestamp Revision Approval dialog (Phase 4):**
+- Payroll menu only.
+- Lists pending requests with employee, work date, event type, original timestamp, requested timestamp, reason, and current issue context.
+- Payroll processor approves or denies each request and may add notes.
+- Approved requests append a `MANUAL` correction event; pending and denied requests never alter attendance.
 
 **Compensation Change dialog (Phase 5):**
 - Dropdown: select employee
@@ -595,7 +632,7 @@ The scorecard is for an individual employee for a selected month. Zero pay infor
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Attendance Scorecard — March 2026                          │
-│  Employee: Mark Anthony       Schedule: Sun–Thu 10AM–7PM    │
+│  Employee: Mark Anthony       Schedule: Sun-Thu 10:00am-07:00pm │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  Monthly Attendance Bonus:    ✅ EARNED                     │
@@ -646,7 +683,7 @@ If NOT earned, the top section flips to red and lists the failure reasons explic
 
 ### 10.2 Rules
 
-- **No deletes, ever.** Past Clock Events, Attendance Log entries, Payroll Calculations, and Comp Master rows for terminated employees stay forever.
+- **No source deletes, ever.** Past Clock Events, timestamp revision requests, payroll calculations, and Comp Master rows for terminated employees stay forever. Generated Attendance Log windows may be rebuilt, but source rows remain append-only.
 - **Default views filter to active employees.** The Employees tab has a "Show: Active only" filter view as default. Inactive employees are still in the underlying data, just hidden from default views.
 - **Final Payroll on offboarding** automatically applies the Baseline doc's resignation rules:
   - Attendance bonus forfeited
@@ -670,7 +707,7 @@ If NOT earned, the top section flips to red and lists the failure reasons explic
 - Apps Script in the Payroll Sheet pulls from the Attendance Sheet using the script's authority, so even if an assistant has Edit access to the Attendance Sheet, they cannot trigger payroll calculations
 - The PTO Balance tab in the Attendance Sheet shows day counts, plan type, earned PTO, remaining PTO, and payout-eligible days, never payout dollars
 - Scorecards show attendance data only, never pay
-- The Web App writes only to Clock Events (Attendance Sheet) — it never touches the Payroll Sheet
+- The Web App writes only to Clock Events and Timestamp Revision Requests (Attendance Sheet) — it never touches the Payroll Sheet
 - All comp changes and lifecycle events are logged with timestamps and user emails
 - The Add New Employee dialog has two modes: assistant mode collects only attendance-relevant fields; processor mode is required to set the comp
 
@@ -682,14 +719,14 @@ Sourced from `_MASTER__Compensation_Plans.xlsx`. **Best-guess assumption: all em
 
 | Employee | Schedule | Monthly Base (incl. benefits) | Benefits | KPI Max | Att. Bonus | Quarterly PA | Annual PTO | Annual Non-PTO | Source sheet |
 |---|---|---|---|---|---|---|---|---|---|
-| Mark | Sun–Thu 10AM–7PM | $1,100 | $75 | $150 | $100 | $150 | 4 | 4 | "Rolly (Mark)" |
-| Paul | Mon–Thu, Sat 10AM–7PM | $600 | $75 | $100 | $100 | $150 | 4 | 4 | "Paul" |
-| Andrea | M–F 10AM–7PM | $770 | $120 | $80 | $50 | $150 | 4 | 4 | "Andrea" |
-| Charisse | M–F 10AM–7PM | $750 | $100 | ~$150 (G7×0.20) | $50 | $150 | 4 | 4 | "Charisse" |
-| Alli (Mae) | M–F 11AM–8PM | TBD | TBD | TBD | TBD | TBD | TBD | TBD | "ALLI MAE" |
-| Adrian | M–F 10AM–7PM | TBD — no sheet found | — | — | — | — | — | — | — |
-| Camille | M–T, F–Sun 10AM–7PM | TBD — no sheet found | — | — | — | — | — | — | — |
-| Alexis | M–F 10AM–7PM | TBD — no sheet found | — | — | — | — | — | — | — |
+| Mark | Sun-Thu 10:00am-07:00pm | $1,100 | $75 | $150 | $100 | $150 | 4 | 4 | "Rolly (Mark)" |
+| Paul | Mon-Thu, Sat 10:00am-07:00pm | $600 | $75 | $100 | $100 | $150 | 4 | 4 | "Paul" |
+| Andrea | M-F 10:00am-07:00pm | $770 | $120 | $80 | $50 | $150 | 4 | 4 | "Andrea" |
+| Charisse | M-F 10:00am-07:00pm | $750 | $100 | ~$150 (G7×0.20) | $50 | $150 | 4 | 4 | "Charisse" |
+| Alli (Mae) | M-F 11:00am-08:00pm | TBD | TBD | TBD | TBD | TBD | TBD | TBD | "ALLI MAE" |
+| Adrian | M-F 10:00am-07:00pm | TBD — no sheet found | — | — | — | — | — | — | — |
+| Camille | M-T, F-Sun 10:00am-07:00pm | TBD — no sheet found | — | — | — | — | — | — | — |
+| Alexis | M-F 10:00am-07:00pm | TBD — no sheet found | — | — | — | — | — | — | — |
 
 > **Action item:** Confirm Mark/Paul/Andrea/Charisse Officialized vs. higher tier, and provide comp for Alli, Adrian, Camille, Alexis.
 > Existing seeded compensation rows default to `Fixed Annual` PTO until a payroll processor changes the plan.

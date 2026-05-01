@@ -192,11 +192,11 @@
         <div class="grid" style="margin-top:20px;">
           <div>
             <label for="lunchStart">Scheduled Lunch Start</label>
-            <input id="lunchStart" type="number" min="0" max="24" step="0.25" value="13">
+            <input id="lunchStart" value="01:00pm" placeholder="01:00pm" pattern="[0-9]{2}:[0-9]{2}([aApP][mM])">
           </div>
           <div>
             <label for="lunchEnd">Scheduled Lunch End</label>
-            <input id="lunchEnd" type="number" min="0" max="24" step="0.25" value="14">
+            <input id="lunchEnd" value="02:00pm" placeholder="02:00pm" pattern="[0-9]{2}:[0-9]{2}([aApP][mM])">
           </div>
         </div>
       </div>
@@ -237,8 +237,8 @@
           <tr>
             <td>${day}</td>
             <td><input id="${day}Enabled" type="checkbox" ${['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].includes(day) ? 'checked' : ''}></td>
-            <td><input id="${day}Start" type="number" min="0" max="24" step="0.25" value="10"></td>
-            <td><input id="${day}End" type="number" min="0" max="24" step="0.25" value="19"></td>
+            <td><input id="${day}Start" value="10:00am" placeholder="10:00am" pattern="[0-9]{2}:[0-9]{2}([aApP][mM])"></td>
+            <td><input id="${day}End" value="07:00pm" placeholder="07:00pm" pattern="[0-9]{2}:[0-9]{2}([aApP][mM])"></td>
           </tr>
         `).join('');
         google.script.run

@@ -243,6 +243,10 @@
             <input id="manager">
           </div>
           <div class="field">
+            <label for="department">Department</label>
+            <select id="department" required></select>
+          </div>
+          <div class="field">
             <label for="startDate">Start Date</label>
             <input id="startDate" type="date">
           </div>
@@ -272,11 +276,11 @@
         <div class="grid lunch-grid">
           <div class="field">
             <label for="lunchStart">Scheduled Lunch Start</label>
-            <input id="lunchStart" class="schedule-time" type="number" min="0" max="24" step="0.25" value="13">
+            <input id="lunchStart" class="schedule-time" value="01:00pm" placeholder="01:00pm" pattern="[0-9]{2}:[0-9]{2}([aApP][mM])">
           </div>
           <div class="field">
             <label for="lunchEnd">Scheduled Lunch End</label>
-            <input id="lunchEnd" class="schedule-time" type="number" min="0" max="24" step="0.25" value="14">
+            <input id="lunchEnd" class="schedule-time" value="02:00pm" placeholder="02:00pm" pattern="[0-9]{2}:[0-9]{2}([aApP][mM])">
           </div>
         </div>
       </div>
@@ -352,13 +356,17 @@
           <tr>
             <td>${day}</td>
             <td><input id="${day}Enabled" type="checkbox" ${['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].includes(day) ? 'checked' : ''}></td>
-            <td><input id="${day}Start" class="schedule-time" type="number" min="0" max="24" step="0.25" value="10"></td>
-            <td><input id="${day}End" class="schedule-time" type="number" min="0" max="24" step="0.25" value="19"></td>
+            <td><input id="${day}Start" class="schedule-time" value="10:00am" placeholder="10:00am" pattern="[0-9]{2}:[0-9]{2}([aApP][mM])"></td>
+            <td><input id="${day}End" class="schedule-time" value="07:00pm" placeholder="07:00pm" pattern="[0-9]{2}:[0-9]{2}([aApP][mM])"></td>
           </tr>
         `).join('');
         google.script.run
           .withSuccessHandler(defaults => {
             document.getElementById('startDate').value = defaults.today || '';
+            const departments = defaults.departments || ['Operations', 'HR', 'Marketing', 'Advertising'];
+            document.getElementById('department').innerHTML = [''].concat(departments)
+              .map(department => `<option value="${escapeAttr(department)}">${department ? escapeHtml(department) : 'Select department'}</option>`)
+              .join('');
             const plans = defaults.ptoPlanTypes || ['Fixed Annual', 'Accrued Monthly'];
             document.getElementById('ptoPlanType').innerHTML = plans
               .map(plan => `<option value="${escapeAttr(plan)}">${escapeHtml(plan)}</option>`)
@@ -380,8 +388,8 @@
       function submitForm(event) {
         event.preventDefault();
         const payload = collectPayload();
-        if (!payload.fullName || !payload.employeeCode) {
-          setStatus('Full Name and Employee Code are required.', true);
+        if (!payload.fullName || !payload.employeeCode || !payload.department) {
+          setStatus('Full Name, Employee Code, and Department are required.', true);
           return;
         }
         setBusy(true);
@@ -418,6 +426,7 @@
           email: value('email'),
           position: value('position'),
           manager: value('manager'),
+          department: value('department'),
           startDate: value('startDate'),
           pin: value('pin'),
           schedule,
