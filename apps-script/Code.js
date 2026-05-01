@@ -814,7 +814,7 @@ function getScorecardDialogData() {
 
 function getKpiBonusDialogData() {
   const payroll = requirePayrollSpreadsheet_();
-  setupPayrollSpreadsheet_(payroll);
+  ensurePhase3PayrollSheets_(payroll);
   const periods = listPayPeriodsForUi_();
   return {
     periods,
@@ -825,7 +825,7 @@ function getKpiBonusDialogData() {
 function getKpiBonusPeriodData(periodId) {
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
-  setupPayrollSpreadsheet_(payroll);
+  ensurePhase3PayrollSheets_(payroll);
   const period = getPayPeriodById_(payroll, periodId);
   const periodEnd = parseDateOrBlank_(period['Period End']);
   const compRows = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp));
@@ -902,7 +902,7 @@ function saveKpiBonuses(payload) {
 
 function getBonusAdjustmentDialogData(entryMode) {
   const payroll = requirePayrollSpreadsheet_();
-  setupPayrollSpreadsheet_(payroll);
+  ensurePhase3PayrollSheets_(payroll);
   const periods = listPayPeriodsForUi_();
   return {
     entryMode,
@@ -1712,6 +1712,16 @@ function getDefaultOpenPeriodIdByType_(periods, type) {
     .filter(period => period.payDate)
     .sort((a, b) => Math.abs(a.payDate.getTime() - today.getTime()) - Math.abs(b.payDate.getTime() - today.getTime()));
   return matches.length ? matches[0].id : '';
+}
+
+function ensurePhase3PayrollSheets_(payroll) {
+  if (!payroll.getSheetByName(CONFIG.payrollTabs.bonuses)) {
+    const sheet = ensureSheet_(payroll, CONFIG.payrollTabs.bonuses, HEADERS.bonuses);
+    setupSheetFormatting_(sheet, HEADERS.bonuses.length);
+    setValidation_(sheet, 3, ['KPI', 'Additional', 'Positive Adj', 'Negative Adj']);
+    sheet.getRange('E:E').setNumberFormat('$#,##0.00');
+    sheet.getRange('G:G').setNumberFormat('yyyy-mm-dd h:mm AM/PM');
+  }
 }
 
 function groupBonusRowsByEmployee_(bonusRows, periodId, type) {
