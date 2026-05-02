@@ -84,6 +84,10 @@ const PHASE1_TEST = {
   }
 };
 
+function claspRunSmokeTest() {
+  return 'clasp run works';
+}
+
 const HEADERS = {
   employees: [
     'Employee Code',
@@ -676,13 +680,13 @@ function showReactivateEmployeeDialog() {
 
 function showCompensationChangeLog() {
   const payroll = requirePayrollSpreadsheet_();
-  setupPayrollSpreadsheet_(payroll);
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
   payroll.setActiveSheet(getSheet_(payroll, CONFIG.payrollTabs.compChanges));
 }
 
 function showEmployeeLifecycleLog() {
   const payroll = requirePayrollSpreadsheet_();
-  setupPayrollSpreadsheet_(payroll);
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
   payroll.setActiveSheet(getSheet_(payroll, CONFIG.payrollTabs.lifecycle));
 }
 
@@ -730,7 +734,8 @@ function getClockAppInitialState(identity) {
 }
 
 function getClockState(identity) {
-  const employee = resolveWebAppEmployee_(identity);
+  const ss = requireAttendanceSpreadsheet_();
+  const employee = resolveWebAppEmployee_(identity, ss);
   if (!employee) {
     return {
       authenticated: false,
@@ -739,7 +744,6 @@ function getClockState(identity) {
     };
   }
 
-  const ss = requireAttendanceSpreadsheet_();
   const todayWindow = getTodayWindow_();
   const events = getClockEvents_(ss, todayWindow.start, todayWindow.end, employee['Employee Code']);
   const lastEvent = events.length ? events[events.length - 1] : null;
@@ -762,10 +766,11 @@ function getClockState(identity) {
       enabled: allowed.indexOf(type) !== -1
     })),
     currentState: getCurrentStateLabel_(lastEvent ? lastEvent['Event Type'] : ''),
+    lastEventType: lastEvent ? lastEvent['Event Type'] : '',
     todaySummary: buildTodaySummary_(events),
     timeOffTypes: CONFIG.timeOffTypes,
-    ptoBalance: getPtoBalanceSummaryForEmployee_(employeeCode, now.getFullYear()),
-    timesheetSummary: getEmployeeTimesheetSummaryForPortal_(employeeCode),
+    ptoBalance: getPtoBalanceSummaryForEmployee_(employeeCode, now.getFullYear(), ss),
+    timesheetSummary: getEmployeeTimesheetSummaryForPortal_(employeeCode, ss),
     identity: {
       employeeCode,
       hasPinFallback: Boolean(employee['Web App PIN'])
@@ -779,19 +784,17 @@ function recordClockEvent(payload) {
     throw new Error('Invalid event type.');
   }
 
-  const employee = resolveWebAppEmployee_(payload.identity);
-  if (!employee) {
+  const state = getClockState(payload.identity);
+  if (!state.authenticated) {
     throw new Error('Could not identify an active employee. Use your company Google account or enter your employee code and PIN.');
   }
-
-  const state = getClockState(payload.identity);
   const button = state.buttons.filter(item => item.type === payload.eventType)[0];
   if (!button || !button.enabled) {
     throw new Error(`${CONFIG.eventLabels[payload.eventType]} is not allowed from the current state.`);
   }
 
   appendClockEvent_({
-    employeeCode: employee['Employee Code'],
+    employeeCode: state.employee.employeeCode,
     eventType: payload.eventType,
     source: 'WEB_APP',
     timestamp: new Date(),
@@ -828,8 +831,8 @@ function addEmployee_(payload) {
 
   const attendance = requireAttendanceSpreadsheet_();
   const payroll = requirePayrollSpreadsheet_();
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
-  setupPayrollSpreadsheet_(payroll);
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
 
   const employeeSheet = getSheet_(attendance, CONFIG.attendanceTabs.employees);
   const employees = readObjects_(employeeSheet);
@@ -859,7 +862,7 @@ function addEmployee_(payload) {
 
   const compSheet = getSheet_(payroll, CONFIG.payrollTabs.comp);
   const comp = payload.comp || {};
-  compSheet.appendRow([
+  const compRange = appendRows_(compSheet, [[
     code,
     startDate || '',
     '',
@@ -874,10 +877,10 @@ function addEmployee_(payload) {
     comp.notes || (payload.includeComp ? '' : 'Compensation pending payroll processor setup.'),
     normalizePtoPlanType_(comp.ptoPlanType),
     toNumberOrBlank_(comp.monthlyPtoAccrualDays)
-  ]);
+  ]]);
 
   const lifecycleSheet = getSheet_(payroll, CONFIG.payrollTabs.lifecycle);
-  lifecycleSheet.appendRow([
+  const lifecycleRange = appendRows_(lifecycleSheet, [[
     makeId_('LIFE'),
     code,
     'Hired',
@@ -887,13 +890,14 @@ function addEmployee_(payload) {
     getActiveUserEmail_(),
     '',
     payload.notes || ''
-  ]);
+  ]]);
 
   refreshPtoBalances_(attendance);
   applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.employees, employeeRange);
   applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.schedules, scheduleRange);
   applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.ptoBalances);
-  applyPayrollFormatting_(payroll);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.comp, compRange);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.lifecycle, lifecycleRange);
   return { message: `${payload.fullName} (${code}) added.` };
 }
 
@@ -965,7 +969,7 @@ function editAttendanceLogEntry(payload) {
 
 function getTimeOffRequestDialogData() {
   const attendance = requireAttendanceSpreadsheet_();
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   refreshPtoBalances_(attendance);
   applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.ptoBalances);
   return {
@@ -997,7 +1001,7 @@ function submitWebTimeOffRequest(payload) {
 
 function getMakeupRequestDialogData() {
   const attendance = requireAttendanceSpreadsheet_();
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   return {
     employees: listEmployeesForUi_().filter(employee => employee.status === 'Active' || employee.status === ''),
     today: formatDateKey_(new Date())
@@ -1029,19 +1033,13 @@ function getEmployeeTimesheetReview(identity, viewMode) {
 
   const attendance = requireAttendanceSpreadsheet_();
   const payroll = requirePayrollSpreadsheet_();
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
-  repairPayPeriodIds_(payroll);
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
 
   const today = dateOnly_(new Date());
   const windows = getTimesheetReviewWindows_(payroll, today);
   const mode = viewMode === 'recent' ? 'recent' : 'currentPeriod';
   const countStart = minDate_(windows.currentPeriod.start, windows.recent.start);
   const countEnd = maxDate_(windows.currentPeriod.end, windows.recent.end);
-
-  rebuildAttendanceLog({
-    startDate: formatDateKey_(countStart),
-    endDate: formatDateKey_(countEnd)
-  });
 
   const selectedWindow = windows[mode];
   return buildEmployeeTimesheetReviewResponse_(attendance, employee, selectedWindow, windows, mode, countStart, countEnd);
@@ -1059,7 +1057,7 @@ function submitTimestampRevisionRequest_(payload) {
   if (!employee) throw new Error('Could not identify an active employee. Sign in again and retry.');
 
   const attendance = requireAttendanceSpreadsheet_();
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
 
   const employeeCode = normalizeCode_(employee['Employee Code']);
   const workDate = parseDateOrBlank_(payload.workDate);
@@ -1129,7 +1127,7 @@ function submitTimestampRevisionRequest_(payload) {
 
 function getTimestampRevisionApprovalData() {
   const attendance = requireAttendanceSpreadsheet_();
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   const employees = getEmployeeDisplayMap_(attendance);
   const rows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timestampRevisions))
     .filter(row => row['Status (Pending/Approved/Denied)'] === 'Pending')
@@ -1175,7 +1173,7 @@ function processTimestampRevisionRequests_(payload) {
   if (!decisions.length) throw new Error('Choose at least one timestamp revision to approve or deny.');
 
   const attendance = requireAttendanceSpreadsheet_();
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   const sheet = getSheet_(attendance, CONFIG.attendanceTabs.timestampRevisions);
   const rows = readObjects_(sheet);
   const reviewedBy = getActiveUserEmail_();
@@ -1248,7 +1246,7 @@ function processTimestampRevisionRequests_(payload) {
 
 function getPendingRequestsDialogData() {
   const attendance = requireAttendanceSpreadsheet_();
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   refreshPtoBalances_(attendance);
   applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.ptoBalances);
   const employees = getEmployeeDisplayMap_(attendance);
@@ -1313,7 +1311,7 @@ function processPendingRequests_(payload) {
   if (!decisions.length) throw new Error('Choose at least one request to approve or deny.');
 
   const attendance = requireAttendanceSpreadsheet_();
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   const approvedBy = getActiveUserEmail_();
   const approvedAt = new Date();
   let timeOffUpdated = 0;
@@ -1386,7 +1384,7 @@ function processPendingRequests_(payload) {
 
 function refreshPtoBalances() {
   const attendance = requireAttendanceSpreadsheet_();
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   const rows = refreshPtoBalances_(attendance);
   applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.ptoBalances);
   return {
@@ -1397,7 +1395,6 @@ function refreshPtoBalances() {
 
 function getCalculatePayPeriodDialogData() {
   const payroll = requirePayrollSpreadsheet_();
-  repairPayPeriodIds_(payroll);
   const periods = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.periods)).map(row => ({
     periodId: normalizePeriodId_(row['Period ID']),
     payDate: displayDate_(row['Pay Date']),
@@ -1428,7 +1425,7 @@ function getCalculatePayPeriodEmployees(periodId) {
 
 function getScorecardDialogData() {
   const attendance = requireAttendanceSpreadsheet_();
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   return {
     employees: listEmployeesForUi_(),
     months: getAvailableScorecardMonths_(attendance),
@@ -1527,8 +1524,8 @@ function saveKpiBonuses_(payload) {
     ]);
   });
 
-  replaceBonusAdjustmentRows_(getSheet_(payroll, CONFIG.payrollTabs.bonuses), periodId, ['KPI'], employeeCodes, replacements);
-  applyPayrollFormatting_(payroll);
+  const changedRange = replaceBonusAdjustmentRows_(getSheet_(payroll, CONFIG.payrollTabs.bonuses), periodId, ['KPI'], employeeCodes, replacements);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.bonuses, changedRange);
   return {
     message: `${replacements.length} KPI bonus record(s) saved for ${periodId}. Recalculate the pay period to update Payroll Output.`
   };
@@ -1571,7 +1568,7 @@ function addBonusAdjustment_(payload) {
   const description = String(payload.description || '').trim();
   if (!description) throw new Error('Description is required.');
 
-  appendRows_(getSheet_(payroll, CONFIG.payrollTabs.bonuses), [[
+  const changedRange = appendRows_(getSheet_(payroll, CONFIG.payrollTabs.bonuses), [[
     periodId,
     employeeCode,
     type,
@@ -1580,7 +1577,7 @@ function addBonusAdjustment_(payload) {
     getActiveUserEmail_(),
     new Date()
   ]]);
-  applyPayrollFormatting_(payroll);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.bonuses, changedRange);
   return {
     message: `${type} saved for ${employeeCode}. Recalculate ${periodId} to update Payroll Output.`
   };
@@ -1589,8 +1586,8 @@ function addBonusAdjustment_(payload) {
 function getCompensationChangeDialogData() {
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
-  setupPayrollSpreadsheet_(payroll);
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   const periods = listPayPeriodsForUi_();
   return {
     employees: listEmployeesForLifecycleUi_(['Active', '']),
@@ -1602,7 +1599,7 @@ function getCompensationChangeDialogData() {
 
 function getCompensationChangeEmployeeData(employeeCode, effectiveFrom) {
   const payroll = requirePayrollSpreadsheet_();
-  setupPayrollSpreadsheet_(payroll);
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
   const code = normalizeCode_(employeeCode);
   const effectiveDate = parseDateOrBlank_(effectiveFrom) || new Date();
   const current = getCurrentCompRow_(payroll, code, effectiveDate);
@@ -1632,8 +1629,8 @@ function saveCompensationChange_(payload) {
   payload = payload || {};
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
-  setupPayrollSpreadsheet_(payroll);
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
 
   const code = normalizeCode_(payload.employeeCode);
   const effectiveFrom = parseDateOrBlank_(payload.effectiveFrom);
@@ -1682,7 +1679,7 @@ function saveCompensationChange_(payload) {
     : { amount: '', periodId: '', row: null };
 
   compSheet.getRange(current._rowNumber, 3).setValue(addDays_(dateOnly_(effectiveFrom), -1));
-  appendRows_(compSheet, [[
+  const compRange = appendRows_(compSheet, [[
     code,
     dateOnly_(effectiveFrom),
     '',
@@ -1714,16 +1711,19 @@ function saveCompensationChange_(payload) {
     retroactive ? 'Yes' : 'No',
     change.field.header === 'Monthly Base Salary' ? retroAdjustment.amount : ''
   ]);
-  appendRows_(getSheet_(payroll, CONFIG.payrollTabs.compChanges), logRows);
+  const compChangeRange = appendRows_(getSheet_(payroll, CONFIG.payrollTabs.compChanges), logRows);
+  let retroBonusRange = null;
   if (retroAdjustment.row) {
-    appendRows_(getSheet_(payroll, CONFIG.payrollTabs.bonuses), [retroAdjustment.row]);
+    retroBonusRange = appendRows_(getSheet_(payroll, CONFIG.payrollTabs.bonuses), [retroAdjustment.row]);
   }
 
   if (changes.some(change => ['Annual PTO Days', 'Annual Non-PTO Days', 'PTO Plan Type', 'Monthly PTO Accrual Days'].indexOf(change.field.header) !== -1)) {
     refreshPtoBalances_(attendance);
     applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.ptoBalances);
   }
-  applyPayrollFormatting_(payroll);
+  applyChangedPayrollRowsByRowNumbers_(payroll, CONFIG.payrollTabs.comp, [current._rowNumber, compRange.startRow]);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.compChanges, compChangeRange);
+  if (retroBonusRange) applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.bonuses, retroBonusRange);
   return {
     message: `${changes.length} compensation field(s) changed for ${code}.${retroAdjustment.periodId ? ` Retroactive adjustment added to ${retroAdjustment.periodId}.` : ''}`
   };
@@ -1732,8 +1732,8 @@ function saveCompensationChange_(payload) {
 function getOffboardDialogData() {
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
-  setupPayrollSpreadsheet_(payroll);
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   return {
     employees: listEmployeesForLifecycleUi_(['Active', '']),
     today: formatDateKey_(new Date()),
@@ -1749,8 +1749,8 @@ function getOffboardPreview(payload) {
   if (!lastWorkingDay) throw new Error('Last Working Day is required.');
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
-  setupPayrollSpreadsheet_(payroll);
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   return buildFinalPayrollPreview_(attendance, payroll, code, lastWorkingDay);
 }
 
@@ -1773,8 +1773,8 @@ function offboardEmployee_(payload) {
 
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
-  setupPayrollSpreadsheet_(payroll);
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   const employee = getEmployeeRowByCode_(attendance, code);
   if (!employee) throw new Error(`${code} is not an active employee.`);
   if (!getCurrentCompRow_(payroll, code, lastWorkingDay)) {
@@ -1796,7 +1796,7 @@ function offboardEmployee_(payload) {
   const employeeStatusRow = setEmployeeStatus_(attendance, code, eventType, lastWorkingDay);
   closeEffectiveRowsThroughDate_(getSheet_(attendance, CONFIG.attendanceTabs.schedules), code, lastWorkingDay);
   closeEffectiveRowsThroughDate_(getSheet_(payroll, CONFIG.payrollTabs.comp), code, lastWorkingDay);
-  appendRows_(getSheet_(payroll, CONFIG.payrollTabs.lifecycle), [[
+  const lifecycleRange = appendRows_(getSheet_(payroll, CONFIG.payrollTabs.lifecycle), [[
     makeId_('LIFE'),
     code,
     eventType,
@@ -1811,7 +1811,10 @@ function offboardEmployee_(payload) {
   applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.employees, { startRow: employeeStatusRow, rowCount: 1 });
   applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.schedules);
   applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.ptoBalances);
-  applyPayrollFormatting_(payroll);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.lifecycle, lifecycleRange);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.periods);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.comp);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.bonuses);
   return {
     message: `${code} marked ${eventType}. Final payroll ${finalPeriod.periodId} calculated.`
   };
@@ -1820,8 +1823,8 @@ function offboardEmployee_(payload) {
 function getReactivateDialogData() {
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
-  setupPayrollSpreadsheet_(payroll);
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   return {
     employees: listEmployeesForLifecycleUi_(['Inactive', 'Resigned', 'Terminated']),
     today: formatDateKey_(new Date()),
@@ -1832,7 +1835,7 @@ function getReactivateDialogData() {
 
 function getReactivateEmployeeData(employeeCode) {
   const attendance = requireAttendanceSpreadsheet_();
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   const code = normalizeCode_(employeeCode);
   const employee = getEmployeeRowByCodeAnyStatus_(attendance, code);
   if (!employee) throw new Error(`${code} was not found.`);
@@ -1861,8 +1864,8 @@ function reactivateEmployee_(payload) {
 
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
-  setupPayrollSpreadsheet_(payroll);
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   const employee = getEmployeeRowByCodeAnyStatus_(attendance, code);
   if (!employee) throw new Error(`${code} was not found.`);
   if (employee.Status === 'Active' || employee.Status === '') throw new Error(`${code} is already active.`);
@@ -1872,7 +1875,7 @@ function reactivateEmployee_(payload) {
     buildScheduleRowFromPayload_(code, dateOnly_(startDate), payload.schedule || {})
   ]);
   const comp = payload.comp || {};
-  appendRows_(getSheet_(payroll, CONFIG.payrollTabs.comp), [[
+  const compRange = appendRows_(getSheet_(payroll, CONFIG.payrollTabs.comp), [[
     code,
     dateOnly_(startDate),
     '',
@@ -1888,7 +1891,7 @@ function reactivateEmployee_(payload) {
     normalizePtoPlanType_(comp.ptoPlanType),
     toNumberOrBlank_(comp.monthlyPtoAccrualDays)
   ]]);
-  appendRows_(getSheet_(payroll, CONFIG.payrollTabs.lifecycle), [[
+  const lifecycleRange = appendRows_(getSheet_(payroll, CONFIG.payrollTabs.lifecycle), [[
     makeId_('LIFE'),
     code,
     'Reactivated',
@@ -1903,7 +1906,8 @@ function reactivateEmployee_(payload) {
   applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.employees, employeeRange);
   applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.schedules, scheduleRange);
   applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.ptoBalances);
-  applyPayrollFormatting_(payroll);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.comp, compRange);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.lifecycle, lifecycleRange);
   return {
     message: `${code} reactivated with new schedule and compensation rows effective ${formatDateKey_(startDate)}.`
   };
@@ -1939,8 +1943,8 @@ function saveScorecardToSheet(payload) {
 function refreshQuarterlyPaTracker() {
   const attendance = requireAttendanceSpreadsheet_();
   const payroll = requirePayrollSpreadsheet_();
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
-  setupPayrollSpreadsheet_(payroll);
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
 
   const today = dateOnly_(new Date());
   const quarterEndMonth = new Date(today.getFullYear(), Math.floor(today.getMonth() / 3) * 3 - 1, 1);
@@ -1958,13 +1962,13 @@ function refreshQuarterlyPaTracker() {
     .filter(employee => employee.Status === 'Active' || employee.Status === '')
     .map(employee => {
       const code = normalizeCode_(employee['Employee Code']);
-      const comp = getCompForDate_(context.compRows, code, quarterWindow.end);
+      const comp = getCompForDate_(getEmployeeScopedRows_(context.compRowsByEmployee, context.compRows, code), code, quarterWindow.end);
       return buildQuarterlyPaResult_(code, quarterWindow.end, context, comp).trackerRow;
     })
     .filter(Boolean);
 
   upsertQuarterlyPaTrackerRows_(getSheet_(payroll, CONFIG.payrollTabs.paTracker), rows);
-  applyPayrollFormatting_(payroll);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.paTracker);
   return {
     rowsWritten: rows.length,
     message: `${rows.length} employee quarter record(s) refreshed for ${getQuarterLabel_(quarterWindow.end)}.`
@@ -2019,11 +2023,14 @@ function calculatePayPeriod_(payload) {
     if (result.warning) warnings.push(result.warning);
   });
 
-  writeRowsReplacingData_(getSheet_(payroll, CONFIG.payrollTabs.calculations), HEADERS.calculations, calculations);
-  writeRowsReplacingData_(getSheet_(payroll, CONFIG.payrollTabs.output), HEADERS.output, outputRows);
+  const calculationRange = writeRowsReplacingData_(getSheet_(payroll, CONFIG.payrollTabs.calculations), HEADERS.calculations, calculations);
+  const outputRange = writeRowsReplacingData_(getSheet_(payroll, CONFIG.payrollTabs.output), HEADERS.output, outputRows);
   upsertQuarterlyPaTrackerRows_(getSheet_(payroll, CONFIG.payrollTabs.paTracker), paTrackerRows);
   setPayPeriodStatus_(periodSheet, periodId, 'Calculated');
-  applyPayrollFormatting_(payroll);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.calculations, calculationRange);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.output, outputRange);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.paTracker);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.periods);
 
   return {
     message: `Calculated ${outputRows.length} employees for ${periodId}.`,
@@ -2044,7 +2051,7 @@ function rebuildAttendanceLog(options) {
   options = options || {};
   const ss = requireAttendanceSpreadsheet_();
   const formatMode = options.formatMode || 'targeted';
-  setupAttendanceSpreadsheet_(ss, { formatMode: 'none' });
+  setupAttendanceSpreadsheet_(ss, { formatMode: 'none', migrations: false });
 
   const startDate = options.startDate ? parseDateOrBlank_(options.startDate) : getDefaultAttendanceLogStartDate_(ss);
   const endDate = options.endDate ? parseDateOrBlank_(options.endDate) : dateOnly_(new Date());
@@ -2091,11 +2098,13 @@ function upsertAttendanceLogRowsForWindow_(sheet, startDate, endDate, generatedR
   const codeIdx = HEADERS.log.indexOf('Employee Code');
   const values = sheet.getDataRange().getValues();
   const rowsToDelete = [];
+  let insertAfterRow = 1;
   for (let row = 1; row < values.length; row += 1) {
     const rowDate = parseDateOrBlank_(values[row][dateIdx]);
     if (!rowDate) continue;
     const rowTime = dateOnly_(rowDate).getTime();
     if (rowTime >= startTime && rowTime <= endTime) rowsToDelete.push(row + 1);
+    if (rowTime < startTime) insertAfterRow = row + 1;
   }
   const deleteGroups = [];
   rowsToDelete.forEach(rowNumber => {
@@ -2121,14 +2130,6 @@ function upsertAttendanceLogRowsForWindow_(sheet, startDate, endDate, generatedR
   });
   if (!rows.length) return { startRow: 0, rowCount: 0 };
 
-  const remainingValues = sheet.getDataRange().getValues();
-  let insertAfterRow = 1;
-  for (let row = 1; row < remainingValues.length; row += 1) {
-    const rowDate = parseDateOrBlank_(remainingValues[row][dateIdx]);
-    if (!rowDate) continue;
-    if (dateOnly_(rowDate).getTime() < startTime) insertAfterRow = row + 1;
-  }
-
   let startRow;
   if (insertAfterRow >= sheet.getLastRow()) {
     startRow = sheet.getLastRow() + 1;
@@ -2142,6 +2143,7 @@ function upsertAttendanceLogRowsForWindow_(sheet, startDate, endDate, generatedR
 
 function setupAttendanceSpreadsheet_(ss, options) {
   options = options || {};
+  const runMigrations = options.migrations !== false;
   ensureSheet_(ss, CONFIG.attendanceTabs.employees, HEADERS.employees);
   ensureSheet_(ss, CONFIG.attendanceTabs.schedules, HEADERS.schedules);
   ensureSheet_(ss, CONFIG.attendanceTabs.holidays, HEADERS.holidays);
@@ -2152,12 +2154,14 @@ function setupAttendanceSpreadsheet_(ss, options) {
   ensureSheet_(ss, CONFIG.attendanceTabs.makeupRequests, HEADERS.makeupRequests);
   ensureSheet_(ss, CONFIG.attendanceTabs.timestampRevisions, HEADERS.timestampRevisions);
   ensureScorecardSheet_(ss);
-  migrateScheduleTimeDisplays_(ss);
+  if (runMigrations) migrateScheduleTimeDisplays_(ss);
   removeDefaultBlankSheet_(ss);
   if (options.formatMode !== 'none') applyAttendanceFormatting_(ss);
 }
 
-function setupPayrollSpreadsheet_(ss) {
+function setupPayrollSpreadsheet_(ss, options) {
+  options = options || {};
+  const runMigrations = options.migrations !== false;
   ensureSheet_(ss, CONFIG.payrollTabs.comp, HEADERS.comp);
   ensureSheet_(ss, CONFIG.payrollTabs.periods, HEADERS.periods);
   ensureSheet_(ss, CONFIG.payrollTabs.calculations, HEADERS.calculations);
@@ -2166,10 +2170,12 @@ function setupPayrollSpreadsheet_(ss) {
   ensureSheet_(ss, CONFIG.payrollTabs.compChanges, HEADERS.compChanges);
   ensureSheet_(ss, CONFIG.payrollTabs.paTracker, HEADERS.paTracker);
   ensureSheet_(ss, CONFIG.payrollTabs.bonuses, HEADERS.bonuses);
-  seedPayPeriods_(ss, new Date().getFullYear());
-  migratePtoPlanDefaults_(ss);
+  if (runMigrations) {
+    seedPayPeriods_(ss, new Date().getFullYear());
+    migratePtoPlanDefaults_(ss);
+  }
   removeDefaultBlankSheet_(ss);
-  applyPayrollFormatting_(ss);
+  if (options.formatMode !== 'none') applyPayrollFormatting_(ss);
 }
 
 function migratePtoPlanDefaults_(payroll) {
@@ -2438,11 +2444,16 @@ function getDefaultScorecardMonth_(attendance) {
 }
 
 function buildAttendanceSummaryContext_(attendance) {
+  const employeeRows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees));
+  const schedules = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules));
+  const attendanceRows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.log));
   return {
     attendance,
-    employees: mapByCode_(readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees))),
-    schedules: readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules)),
-    attendanceRows: readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.log))
+    employees: mapByCode_(employeeRows),
+    schedules,
+    schedulesByEmployee: groupRowsByEmployee_(schedules),
+    attendanceRows,
+    attendanceRowsByEmployee: groupRowsByEmployee_(attendanceRows)
   };
 }
 
@@ -2451,8 +2462,10 @@ function buildMonthlyAttendanceSummary_(context, employeeCode, monthStart) {
   const month = getMonthWindow_(formatMonthKey_(monthStart));
   const employee = context.employees[code];
   if (!employee) throw new Error(`Employee ${code} was not found.`);
+  const employeeAttendanceRows = getEmployeeScopedRows_(context.attendanceRowsByEmployee, context.attendanceRows, code);
+  const employeeSchedules = getEmployeeScopedRows_(context.schedulesByEmployee, context.schedules, code);
 
-  const rows = context.attendanceRows.filter(row => {
+  const rows = employeeAttendanceRows.filter(row => {
     const rowDate = parseDateOrBlank_(row.Date);
     return normalizeCode_(row['Employee Code']) === code
       && rowDate
@@ -2491,7 +2504,7 @@ function buildMonthlyAttendanceSummary_(context, employeeCode, monthStart) {
     const clockIn = parseDateOrBlank_(row['Clock In']);
     const clockOut = parseDateOrBlank_(row['Clock Out']);
     const scheduledStart = parseDateOrBlank_(row['Scheduled Start']);
-    const schedule = getScheduleForDate_(context.schedules, code, date);
+    const schedule = getScheduleForDate_(employeeSchedules, code, date);
     const daySchedule = getDaySchedule_(schedule, date);
     const lateMinutes = toNumberOrBlank_(row['Total Late Minutes']) === '' ? 0 : Number(row['Total Late Minutes']);
     let lateClockIn = 0;
@@ -2572,7 +2585,7 @@ function buildMonthlyAttendanceSummary_(context, employeeCode, monthStart) {
     },
     month: month.key,
     monthLabel: month.label,
-    scheduleSummary: buildScheduleSummary_(context.schedules, code, month.start),
+    scheduleSummary: buildScheduleSummary_(employeeSchedules, code, month.start),
     bonus,
     stats,
     perfectAttendance,
@@ -2792,7 +2805,6 @@ function upsertQuarterlyPaTrackerRows_(sheet, rows) {
 
 function listPayPeriodsForUi_() {
   const payroll = requirePayrollSpreadsheet_();
-  repairPayPeriodIds_(payroll);
   return readObjects_(getSheet_(payroll, CONFIG.payrollTabs.periods)).map(row => ({
     periodId: normalizePeriodId_(row['Period ID']),
     payDate: displayDate_(row['Pay Date']),
@@ -2837,7 +2849,6 @@ function ensurePayPeriodsForDialog_(payroll) {
   if (!readObjects_(sheet).length) {
     seedPayPeriods_(payroll, new Date().getFullYear());
   }
-  repairPayPeriodIds_(payroll);
 }
 
 function groupBonusRowsByEmployee_(bonusRows, periodId, type) {
@@ -2873,7 +2884,7 @@ function replaceBonusAdjustmentRows_(sheet, periodId, types, employeeCodes, repl
       }
     }
   }
-  appendRows_(sheet, replacements);
+  return appendRows_(sheet, replacements);
 }
 
 function summarizeBonusAdjustments_(bonusRows, periodId, employeeCode) {
@@ -2899,6 +2910,21 @@ function summarizeBonusAdjustments_(bonusRows, periodId, employeeCode) {
   return summary;
 }
 
+function summarizeBonusAdjustmentsForContext_(context, periodId, employeeCode) {
+  const key = `${normalizePeriodId_(periodId)}|${normalizeCode_(employeeCode)}`;
+  if (context.bonusSummaryIndex && context.bonusSummaryIndex[key]) {
+    const summary = context.bonusSummaryIndex[key];
+    return {
+      kpi: summary.kpi,
+      additional: summary.additional,
+      positive: summary.positive,
+      negative: summary.negative,
+      notes: summary.notes.slice()
+    };
+  }
+  return summarizeBonusAdjustments_(context.bonusRows || [], periodId, employeeCode);
+}
+
 function calculateBenefitsForPeriod_(employeeCode, employee, period, context, comp) {
   const monthlyBenefit = comp ? toNumberOrBlank_(comp['Monthly Benefits']) : '';
   const periodStart = dateOnly_(parseDateOrBlank_(period['Period Start']));
@@ -2906,9 +2932,11 @@ function calculateBenefitsForPeriod_(employeeCode, employee, period, context, co
   const monthStart = new Date(periodStart.getFullYear(), periodStart.getMonth(), 1);
   const monthEnd = new Date(periodStart.getFullYear(), periodStart.getMonth() + 1, 0);
   const finalPayroll = isFinalPayroll_(period);
+  const employeeSchedules = getEmployeeScopedRows_(context.schedulesByEmployee, context.schedules, employeeCode);
+  const employeeAttendanceRows = getEmployeeScopedRows_(context.attendanceRowsByEmployee, context.attendanceRows, employeeCode);
   const totalScheduledDays = finalPayroll
-    ? countScheduledDaysInRateMonth_(context.schedules, employeeCode, periodEnd)
-    : countScheduledDaysInMonth_(context.schedules, employeeCode, monthStart);
+    ? countScheduledDaysInRateMonth_(employeeSchedules, employeeCode, periodEnd)
+    : countScheduledDaysInMonth_(employeeSchedules, employeeCode, monthStart);
   if (monthlyBenefit === '') {
     return {
       monthlyBenefit: '',
@@ -2929,8 +2957,7 @@ function calculateBenefitsForPeriod_(employeeCode, employee, period, context, co
   }
 
   const unpaidStatusByDate = {};
-  context.attendanceRows.forEach(row => {
-    if (normalizeCode_(row['Employee Code']) !== normalizeCode_(employeeCode)) return;
+  employeeAttendanceRows.forEach(row => {
     const date = parseDateOrBlank_(row.Date);
     if (!date) return;
     const status = row.Status || '';
@@ -2942,7 +2969,7 @@ function calculateBenefitsForPeriod_(employeeCode, employee, period, context, co
   let eligibleDays = 0;
   let periodEligibleDays = 0;
   for (let cursor = monthStart; cursor.getTime() <= monthEnd.getTime(); cursor = addDays_(cursor, 1)) {
-    const schedule = getScheduleForDate_(context.schedules, employeeCode, cursor);
+    const schedule = getScheduleForDate_(employeeSchedules, employeeCode, cursor);
     const daySchedule = getDaySchedule_(schedule, cursor);
     if (!daySchedule.isScheduled) continue;
     const eligible = employeeEmployedOnDate_(employee, cursor)
@@ -3421,7 +3448,7 @@ function getPayrollWorkflowGuide_() {
           ['Incomplete attendance', 'Payroll Output', 'Status = Needs review', 'Clock-out is missing for a scheduled day.', 'Correct attendance, rebuild log, then recalculate.', 'Operations manager'],
           ['Pending timestamp revision', 'Payroll Output', 'Status = Needs review', 'Employee has an unresolved timestamp revision in the period.', 'Approve or deny from Payroll > Approve Timestamp Revisions, then recalculate.', 'Payroll processor'],
           ['Absent deduction', 'Payroll Calculations', 'Absent Days > 0', 'Scheduled day has no clock-in.', 'Confirm absence classification before approval.', 'Payroll approver'],
-          ['Late deduction', 'Payroll Calculations', 'Late Minutes > 0', 'Late start or late lunch return.', 'Review against policy and correct source events if needed.', 'Payroll approver'],
+          ['Late minutes', 'Payroll Calculations', 'Late Minutes > 0 and Late Deduction = 0', 'Late start or late lunch return.', 'Review for attendance bonus eligibility and correct source events if needed.', 'Payroll approver'],
           ['Short hours deduction', 'Payroll Calculations', 'Short Hours > 0', 'Worked hours are below eight for a scheduled day.', 'Confirm early leave, correction, or override path.', 'Payroll approver'],
           ['Benefits', 'Payroll Calculations', 'Benefits and Benefit Eligible Days', 'Mid-month starts, exits, UTO, or Non-PTO can prorate benefits.', 'Review proration notes before approval.', 'Payroll approver'],
           ['Approved leave', 'Attendance Log', 'Status = PTO, UTO, or Non-PTO', 'A manager approved a time off request.', 'Confirm the approval and dates before paying.', 'Operations manager'],
@@ -3463,7 +3490,7 @@ function getPayrollWorkflowGuide_() {
         description: 'Run injectPhase1TestData() to create a private test pay period without using a production period ID.',
         headers: ['Period ID', 'Employee Set', 'Expected Warning', 'Review Tab', 'Status', 'Notes'],
         rows: [
-          [PHASE1_TEST.periodId, PHASE1_TEST.employeeCodes.join(', '), 'MARK late minutes.', 'Payroll Calculations', 'Calculated', 'Tests late deduction math.'],
+          [PHASE1_TEST.periodId, PHASE1_TEST.employeeCodes.join(', '), 'MARK late minutes.', 'Payroll Calculations', 'Calculated', 'Tests late-minute tracking for attendance bonus without base-pay deduction.'],
           [PHASE1_TEST.periodId, PHASE1_TEST.employeeCodes.join(', '), 'PAUL absent day.', 'Payroll Calculations', 'Calculated', 'Tests absence deduction math.'],
           [PHASE1_TEST.periodId, PHASE1_TEST.employeeCodes.join(', '), 'ANDREA short hours.', 'Payroll Calculations', 'Calculated', 'Tests short-hours deduction math.'],
           [PHASE1_TEST.periodId, PHASE1_TEST.employeeCodes.join(', '), 'CHARISSE incomplete day.', 'Payroll Output', 'Needs review', 'Total remains blank until attendance is corrected.']
@@ -3501,16 +3528,29 @@ function installOpenTriggers_(spreadsheets) {
 }
 
 function buildPayrollContext_(attendance, payroll, periodStart, periodEnd) {
+  const employeeRows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees));
+  const schedules = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules));
+  const attendanceRows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.log));
+  const makeupRows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.makeupRequests));
+  const timestampRevisionRows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timestampRevisions));
+  const compRows = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp));
+  const bonusRows = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.bonuses));
   return {
     attendance,
     payroll,
-    employees: mapByCode_(readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees))),
-    schedules: readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules)),
-    attendanceRows: readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.log)),
-    makeupRows: readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.makeupRequests)),
-    timestampRevisionRows: readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timestampRevisions)),
-    compRows: readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp)),
-    bonusRows: readObjects_(getSheet_(payroll, CONFIG.payrollTabs.bonuses)),
+    employees: mapByCode_(employeeRows),
+    schedules,
+    schedulesByEmployee: groupRowsByEmployee_(schedules),
+    attendanceRows,
+    attendanceRowsByEmployee: groupRowsByEmployee_(attendanceRows),
+    makeupRows,
+    makeupRowsByEmployee: groupRowsByEmployee_(makeupRows),
+    timestampRevisionRows,
+    timestampRevisionRowsByEmployee: groupRowsByEmployee_(timestampRevisionRows),
+    compRows,
+    compRowsByEmployee: groupRowsByEmployee_(compRows),
+    bonusRows,
+    bonusSummaryIndex: buildBonusSummaryIndex_(bonusRows),
     periodStart,
     periodEnd
   };
@@ -3528,7 +3568,10 @@ function calculateEmployeePay_(employeeCode, period, context) {
     return blankPayrollResult_(period, code, employeeName, 'Needs review', 'Employee was not found in Attendance Employees.');
   }
 
-  const comp = getCompForDate_(context.compRows, code, periodEnd);
+  const employeeCompRows = getEmployeeScopedRows_(context.compRowsByEmployee, context.compRows, code);
+  const employeeSchedules = getEmployeeScopedRows_(context.schedulesByEmployee, context.schedules, code);
+  const employeeAttendanceRows = getEmployeeScopedRows_(context.attendanceRowsByEmployee, context.attendanceRows, code);
+  const comp = getCompForDate_(employeeCompRows, code, periodEnd);
   const monthlyBase = comp ? toNumberOrBlank_(comp['Monthly Base Salary']) : '';
   if (monthlyBase === '') {
     return blankPayrollResult_(period, code, employeeName, 'Needs comp', 'Monthly Base Salary is blank in Compensation Master.');
@@ -3536,15 +3579,15 @@ function calculateEmployeePay_(employeeCode, period, context) {
 
   const finalPayroll = isFinalPayroll_(period);
   const scheduledDaysInMonth = finalPayroll
-    ? countScheduledDaysInRateMonth_(context.schedules, code, periodEnd)
-    : countScheduledDaysInMonth_(context.schedules, code, periodStart);
+    ? countScheduledDaysInRateMonth_(employeeSchedules, code, periodEnd)
+    : countScheduledDaysInMonth_(employeeSchedules, code, periodStart);
   if (!scheduledDaysInMonth) {
     return blankPayrollResult_(period, code, employeeName, 'Needs schedule', 'No scheduled days found for this calendar month.');
   }
 
   const dailyBaseRate = monthlyBase / scheduledDaysInMonth;
   const hourlyBaseRate = dailyBaseRate / 8;
-  const periodLogRows = context.attendanceRows.filter(row => {
+  const periodLogRows = employeeAttendanceRows.filter(row => {
     const rowDate = parseDateOrBlank_(row.Date);
     return normalizeCode_(row['Employee Code']) === code
       && rowDate
@@ -3559,7 +3602,8 @@ function calculateEmployeePay_(employeeCode, period, context) {
   let absentDays = 0;
   let shortHours = 0;
   let incompleteDays = 0;
-  const approvedMakeupHours = sumApprovedMakeupHoursForPeriod_(context.makeupRows || [], code, periodStart, periodEnd);
+  const employeeMakeupRows = getEmployeeScopedRows_(context.makeupRowsByEmployee, context.makeupRows, code);
+  const approvedMakeupHours = sumApprovedMakeupHoursForPeriod_(employeeMakeupRows, code, periodStart, periodEnd);
   let remainingMakeupHours = approvedMakeupHours;
   let makeupHoursApplied = 0;
 
@@ -3592,10 +3636,11 @@ function calculateEmployeePay_(employeeCode, period, context) {
   });
 
   const scheduledBase = scheduledDays * 8 * hourlyBaseRate;
-  const lateDeduction = (lateMinutes / 60) * hourlyBaseRate;
+  // Late minutes affect attendance bonus eligibility only; they do not directly reduce base pay.
+  const lateDeduction = 0;
   const absenceDeduction = absentDays * 8 * hourlyBaseRate;
   const shortHoursDeduction = shortHours * hourlyBaseRate;
-  const totalDeductions = lateDeduction + absenceDeduction + shortHoursDeduction;
+  const totalDeductions = absenceDeduction + shortHoursDeduction;
   const benefits = calculateBenefitsForPeriod_(code, employee, period, context, comp);
   let attendanceBonus = calculateMonthlyAttendanceBonus_(code, period, context, comp);
   if (finalPayroll) {
@@ -3607,8 +3652,9 @@ function calculateEmployeePay_(employeeCode, period, context) {
     };
   }
   const quarterlyPaBonus = calculateQuarterlyPaBonus_(code, period, context, comp);
-  const bonusAdjustments = summarizeBonusAdjustments_(context.bonusRows, normalizePeriodId_(period['Period ID']), code);
-  const pendingTimestampRevisions = countPendingTimestampRevisionRequests_(context.timestampRevisionRows || [], code, periodStart, periodEnd);
+  const bonusAdjustments = summarizeBonusAdjustmentsForContext_(context, normalizePeriodId_(period['Period ID']), code);
+  const employeeTimestampRevisionRows = getEmployeeScopedRows_(context.timestampRevisionRowsByEmployee, context.timestampRevisionRows, code);
+  const pendingTimestampRevisions = countPendingTimestampRevisionRequests_(employeeTimestampRevisionRows, code, periodStart, periodEnd);
   const isMidPayroll = isMidPayroll_(period);
   const attendanceBonusAmount = toNumberOrZero_(attendanceBonus.amount);
   const quarterlyPaAmount = toNumberOrZero_(quarterlyPaBonus.amount);
@@ -3792,7 +3838,7 @@ function applySheetHeaderFormatting_(sheet, headerCount) {
   sheet.setRowHeight(1, 42);
 }
 
-function applyAttendanceChangedRowsFormatting_(sheet, startRow, rowCount, headerCount) {
+function applyChangedRowsFormatting_(sheet, startRow, rowCount, headerCount) {
   if (!startRow || !rowCount || rowCount < 1) return;
   sheet.getRange(startRow, 1, rowCount, headerCount)
     .setBackground(UI_THEME.card)
@@ -3801,6 +3847,10 @@ function applyAttendanceChangedRowsFormatting_(sheet, startRow, rowCount, header
     .setFontSize(10)
     .setVerticalAlignment('middle')
     .setBorder(true, true, true, true, true, true, UI_THEME.rule, SpreadsheetApp.BorderStyle.SOLID);
+}
+
+function applyAttendanceChangedRowsFormatting_(sheet, startRow, rowCount, headerCount) {
+  applyChangedRowsFormatting_(sheet, startRow, rowCount, headerCount);
 }
 
 function applyAttendanceSheetFormatting_(ss, tabName, changedRange) {
@@ -3812,7 +3862,7 @@ function applyAttendanceSheetFormatting_(ss, tabName, changedRange) {
   if (!headers) return;
   const sheet = getSheet_(ss, tabName);
   applySheetHeaderFormatting_(sheet, headers.length);
-  applyAttendanceNumberFormatsForTab_(ss, tabName);
+  applyAttendanceNumberFormatsForTab_(ss, tabName, changedRange);
   if (changedRange && changedRange.startRow && changedRange.rowCount) {
     applyAttendanceChangedRowsFormatting_(sheet, changedRange.startRow, changedRange.rowCount, headers.length);
   } else if (!changedRange && sheet.getLastRow() > 1) {
@@ -3842,6 +3892,51 @@ function getAttendanceHeadersForTab_(tabName) {
   mapping[CONFIG.attendanceTabs.ptoBalances] = HEADERS.ptoBalances;
   mapping[CONFIG.attendanceTabs.makeupRequests] = HEADERS.makeupRequests;
   mapping[CONFIG.attendanceTabs.timestampRevisions] = HEADERS.timestampRevisions;
+  return mapping[tabName] || null;
+}
+
+function applyNumberFormatColumns_(sheet, startColumn, columnCount, format, changedRange) {
+  if (changedRange && changedRange.startRow && changedRange.rowCount) {
+    sheet.getRange(changedRange.startRow, startColumn, changedRange.rowCount, columnCount).setNumberFormat(format);
+    return;
+  }
+  sheet.getRange(1, startColumn, sheet.getMaxRows(), columnCount).setNumberFormat(format);
+}
+
+function applyPayrollSheetFormatting_(ss, tabName, changedRange) {
+  const headers = getPayrollHeadersForTab_(tabName);
+  if (!headers) return;
+  const sheet = getSheet_(ss, tabName);
+  applySheetHeaderFormatting_(sheet, headers.length);
+  applyPayrollNumberFormatsForTab_(ss, tabName, changedRange);
+  if (changedRange && changedRange.startRow && changedRange.rowCount) {
+    applyChangedRowsFormatting_(sheet, changedRange.startRow, changedRange.rowCount, headers.length);
+  } else if (!changedRange && sheet.getLastRow() > 1) {
+    applyChangedRowsFormatting_(sheet, 2, sheet.getLastRow() - 1, headers.length);
+  }
+}
+
+function applyChangedPayrollRowsByRowNumbers_(ss, tabName, rowNumbers) {
+  const rows = (rowNumbers || []).filter(Boolean);
+  if (!rows.length) return;
+  const startRow = Math.min.apply(null, rows);
+  const endRow = Math.max.apply(null, rows);
+  applyPayrollSheetFormatting_(ss, tabName, {
+    startRow,
+    rowCount: endRow - startRow + 1
+  });
+}
+
+function getPayrollHeadersForTab_(tabName) {
+  const mapping = {};
+  mapping[CONFIG.payrollTabs.comp] = HEADERS.comp;
+  mapping[CONFIG.payrollTabs.periods] = HEADERS.periods;
+  mapping[CONFIG.payrollTabs.calculations] = HEADERS.calculations;
+  mapping[CONFIG.payrollTabs.output] = HEADERS.output;
+  mapping[CONFIG.payrollTabs.lifecycle] = HEADERS.lifecycle;
+  mapping[CONFIG.payrollTabs.compChanges] = HEADERS.compChanges;
+  mapping[CONFIG.payrollTabs.paTracker] = HEADERS.paTracker;
+  mapping[CONFIG.payrollTabs.bonuses] = HEADERS.bonuses;
   return mapping[tabName] || null;
 }
 
@@ -3890,44 +3985,85 @@ function applyAttendanceFormatting_(ss) {
   applySpreadsheetChrome_(ss, 'attendance');
 }
 
-function applyAttendanceNumberFormatsForTab_(ss, tabName) {
+function applyAttendanceNumberFormatsForTab_(ss, tabName, changedRange) {
   const sheet = getSheet_(ss, tabName);
   if (tabName === CONFIG.attendanceTabs.employees) {
-    sheet.getRange('E:F').setNumberFormat('yyyy-mm-dd');
+    applyNumberFormatColumns_(sheet, 5, 2, 'yyyy-mm-dd', changedRange);
   }
   if (tabName === CONFIG.attendanceTabs.holidays) {
-    sheet.getRange('A:A').setNumberFormat('yyyy-mm-dd');
+    applyNumberFormatColumns_(sheet, 1, 1, 'yyyy-mm-dd', changedRange);
   }
   if (tabName === CONFIG.attendanceTabs.schedules) {
-    sheet.getRange('D:S').setNumberFormat('@');
+    applyNumberFormatColumns_(sheet, 4, 16, '@', changedRange);
   }
   if (tabName === CONFIG.attendanceTabs.events) {
-    sheet.getRange('B:B').setNumberFormat(CONFIG.sheetDateTimeFormat);
+    applyNumberFormatColumns_(sheet, 2, 1, CONFIG.sheetDateTimeFormat, changedRange);
   }
   if (tabName === CONFIG.attendanceTabs.log) {
-    sheet.getRange('A:A').setNumberFormat('yyyy-mm-dd');
-    sheet.getRange('D:M').setNumberFormat(CONFIG.sheetTimeFormat);
-    sheet.getRange('N:O').setNumberFormat('0.00');
+    applyNumberFormatColumns_(sheet, 1, 1, 'yyyy-mm-dd', changedRange);
+    applyNumberFormatColumns_(sheet, 4, 10, CONFIG.sheetTimeFormat, changedRange);
+    applyNumberFormatColumns_(sheet, 14, 2, '0.00', changedRange);
   }
   if (tabName === CONFIG.attendanceTabs.timeOffRequests) {
-    sheet.getRange('D:E').setNumberFormat('yyyy-mm-dd');
-    sheet.getRange('F:F').setNumberFormat('0.00');
-    sheet.getRange('J:J').setNumberFormat(CONFIG.sheetDateTimeFormat);
+    applyNumberFormatColumns_(sheet, 4, 2, 'yyyy-mm-dd', changedRange);
+    applyNumberFormatColumns_(sheet, 6, 1, '0.00', changedRange);
+    applyNumberFormatColumns_(sheet, 10, 1, CONFIG.sheetDateTimeFormat, changedRange);
   }
   if (tabName === CONFIG.attendanceTabs.ptoBalances) {
-    sheet.getRange('B:B').setNumberFormat('0');
-    sheet.getRange('D:L').setNumberFormat('0.00');
+    applyNumberFormatColumns_(sheet, 2, 1, '0', changedRange);
+    applyNumberFormatColumns_(sheet, 4, 9, '0.00', changedRange);
   }
   if (tabName === CONFIG.attendanceTabs.makeupRequests) {
-    sheet.getRange('C:C').setNumberFormat('yyyy-mm-dd');
-    sheet.getRange('D:D').setNumberFormat('0.00');
-    sheet.getRange('H:H').setNumberFormat(CONFIG.sheetDateTimeFormat);
+    applyNumberFormatColumns_(sheet, 3, 1, 'yyyy-mm-dd', changedRange);
+    applyNumberFormatColumns_(sheet, 4, 1, '0.00', changedRange);
+    applyNumberFormatColumns_(sheet, 8, 1, CONFIG.sheetDateTimeFormat, changedRange);
   }
   if (tabName === CONFIG.attendanceTabs.timestampRevisions) {
-    sheet.getRange('C:C').setNumberFormat('yyyy-mm-dd');
-    sheet.getRange('F:G').setNumberFormat(CONFIG.sheetDateTimeFormat);
-    sheet.getRange('J:J').setNumberFormat(CONFIG.sheetDateTimeFormat);
-    sheet.getRange('L:L').setNumberFormat(CONFIG.sheetDateTimeFormat);
+    applyNumberFormatColumns_(sheet, 3, 1, 'yyyy-mm-dd', changedRange);
+    applyNumberFormatColumns_(sheet, 6, 2, CONFIG.sheetDateTimeFormat, changedRange);
+    applyNumberFormatColumns_(sheet, 10, 1, CONFIG.sheetDateTimeFormat, changedRange);
+    applyNumberFormatColumns_(sheet, 12, 1, CONFIG.sheetDateTimeFormat, changedRange);
+  }
+}
+
+function applyPayrollNumberFormatsForTab_(ss, tabName, changedRange) {
+  const sheet = getSheet_(ss, tabName);
+  if (tabName === CONFIG.payrollTabs.comp) {
+    applyNumberFormatColumns_(sheet, 2, 2, 'yyyy-mm-dd', changedRange);
+    applyNumberFormatColumns_(sheet, 5, 5, '$#,##0.00', changedRange);
+    applyNumberFormatColumns_(sheet, 10, 2, '0.00', changedRange);
+    applyNumberFormatColumns_(sheet, 14, 1, '0.00', changedRange);
+  }
+  if (tabName === CONFIG.payrollTabs.periods) {
+    applyNumberFormatColumns_(sheet, 2, 3, 'yyyy-mm-dd', changedRange);
+  }
+  if (tabName === CONFIG.payrollTabs.calculations) {
+    applyNumberFormatColumns_(sheet, 4, 2, 'yyyy-mm-dd', changedRange);
+    applyNumberFormatColumns_(sheet, 8, 3, '$#,##0.00', changedRange);
+    applyNumberFormatColumns_(sheet, 13, 1, '$#,##0.00', changedRange);
+    applyNumberFormatColumns_(sheet, 15, 1, '$#,##0.00', changedRange);
+    applyNumberFormatColumns_(sheet, 17, 4, '$#,##0.00', changedRange);
+    applyNumberFormatColumns_(sheet, 23, 2, '$#,##0.00', changedRange);
+    applyNumberFormatColumns_(sheet, 27, 1, '$#,##0.00', changedRange);
+    applyNumberFormatColumns_(sheet, 30, 5, '$#,##0.00', changedRange);
+  }
+  if (tabName === CONFIG.payrollTabs.output) {
+    applyNumberFormatColumns_(sheet, 3, 8, '$#,##0.00', changedRange);
+  }
+  if (tabName === CONFIG.payrollTabs.lifecycle) {
+    applyNumberFormatColumns_(sheet, 4, 2, CONFIG.sheetDateTimeFormat, changedRange);
+  }
+  if (tabName === CONFIG.payrollTabs.compChanges) {
+    applyNumberFormatColumns_(sheet, 3, 2, CONFIG.sheetDateTimeFormat, changedRange);
+    applyNumberFormatColumns_(sheet, 11, 1, '$#,##0.00', changedRange);
+  }
+  if (tabName === CONFIG.payrollTabs.paTracker) {
+    applyNumberFormatColumns_(sheet, 12, 1, '$#,##0.00', changedRange);
+    applyNumberFormatColumns_(sheet, 14, 1, CONFIG.sheetDateTimeFormat, changedRange);
+  }
+  if (tabName === CONFIG.payrollTabs.bonuses) {
+    applyNumberFormatColumns_(sheet, 5, 1, '$#,##0.00', changedRange);
+    applyNumberFormatColumns_(sheet, 7, 1, CONFIG.sheetDateTimeFormat, changedRange);
   }
 }
 
@@ -4210,12 +4346,11 @@ function buildTodaySummary_(events) {
   return events.map(event => `${CONFIG.eventLabels[event['Event Type']] || event['Event Type']}: ${displayTime_(event.Timestamp)}`);
 }
 
-function getEmployeeTimesheetSummaryForPortal_(employeeCode) {
+function getEmployeeTimesheetSummaryForPortal_(employeeCode, attendance) {
   try {
-    const attendance = requireAttendanceSpreadsheet_();
+    attendance = attendance || requireAttendanceSpreadsheet_();
     const payroll = requirePayrollSpreadsheet_();
-    setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
-    repairPayPeriodIds_(payroll);
+    setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
     const windows = getTimesheetReviewWindows_(payroll, dateOnly_(new Date()));
     const countStart = minDate_(windows.currentPeriod.start, windows.recent.start);
     const countEnd = maxDate_(windows.currentPeriod.end, windows.recent.end);
@@ -4309,8 +4444,15 @@ function getCurrentTimesheetPayPeriod_(payroll, today) {
 }
 
 function buildEmployeeTimesheetReviewResponse_(attendance, employee, selectedWindow, windows, mode, countStart, countEnd) {
-  const selectedRows = buildTimesheetReviewRows_(attendance, employee, selectedWindow.start, selectedWindow.end);
-  const countRows = buildTimesheetReviewRows_(attendance, employee, countStart, countEnd);
+  const countRows = buildTimesheetReviewRows_(attendance, employee, countStart, countEnd, { computeFromSources: true });
+  const selectedStart = dateOnly_(selectedWindow.start).getTime();
+  const selectedEnd = dateOnly_(selectedWindow.end).getTime();
+  const selectedRows = countRows.filter(row => {
+    const rowDate = parseDateOrBlank_(row.date);
+    if (!rowDate) return false;
+    const rowTime = dateOnly_(rowDate).getTime();
+    return rowTime >= selectedStart && rowTime <= selectedEnd;
+  });
   const counts = summarizeTimesheetRows_(countRows);
   return {
     authenticated: true,
@@ -4347,8 +4489,9 @@ function buildTimesheetReviewRows_(attendance, employee, startDate, endDate, opt
   const start = dateOnly_(startDate);
   const end = dateOnly_(endDate);
   const schedules = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules));
+  const events = getClockEvents_(attendance, start, endOfDay_(end), code);
   const logRows = options.computeFromSources
-    ? buildTimesheetLogRowsFromSources_(attendance, employee, start, end, schedules)
+    ? buildTimesheetLogRowsFromSources_(attendance, employee, start, end, schedules, events)
     : readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.log))
       .filter(row => {
         const date = parseDateOrBlank_(row.Date);
@@ -4357,7 +4500,6 @@ function buildTimesheetReviewRows_(attendance, employee, startDate, endDate, opt
           && date.getTime() >= start.getTime()
           && date.getTime() <= end.getTime();
       });
-  const events = getClockEvents_(attendance, start, endOfDay_(end), code);
   const revisions = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timestampRevisions))
     .filter(row => {
       const date = parseDateOrBlank_(row['Work Date']);
@@ -4430,9 +4572,9 @@ function buildTimesheetReviewRows_(attendance, employee, startDate, endDate, opt
   return rows;
 }
 
-function buildTimesheetLogRowsFromSources_(attendance, employee, startDate, endDate, schedules) {
+function buildTimesheetLogRowsFromSources_(attendance, employee, startDate, endDate, schedules, events) {
   const code = normalizeCode_(employee['Employee Code']);
-  const events = getClockEvents_(attendance, startDate, endOfDay_(endDate), code);
+  events = events || getClockEvents_(attendance, startDate, endOfDay_(endDate), code);
   const holidays = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.holidays));
   const overrides = readAttendanceStatusOverrides_(attendance, startDate, endDate);
   const eventsByKey = groupEventsByDateEmployee_(events);
@@ -4555,8 +4697,8 @@ function getTimestampRevisionIssueContext_(attendance, revisionRow) {
   return issues.length ? issues.map(issue => issue.label).join(' | ') : 'No current issue flag';
 }
 
-function resolveWebAppEmployee_(identity) {
-  const ss = requireAttendanceSpreadsheet_();
+function resolveWebAppEmployee_(identity, ss) {
+  ss = ss || requireAttendanceSpreadsheet_();
   const employees = readObjects_(getSheet_(ss, CONFIG.attendanceTabs.employees))
     .filter(row => row.Status === 'Active');
   const activeEmail = (getActiveUserEmail_() || '').toLowerCase();
@@ -4587,8 +4729,7 @@ function appendClockEvent_(entry) {
     entry.correctsEventId || ''
   ]]);
   applyAttendanceChangedRowsFormatting_(sheet, eventRange.startRow, eventRange.rowCount, HEADERS.events.length);
-  applyAttendanceNumberFormatsForTab_(ss, CONFIG.attendanceTabs.events);
-  SpreadsheetApp.flush();
+  applyAttendanceNumberFormatsForTab_(ss, CONFIG.attendanceTabs.events, eventRange);
   return {
     eventId,
     range: eventRange
@@ -4687,7 +4828,7 @@ function readApprovedTimeOffOverrides_(ss, startDate, endDate) {
 function createTimeOffRequest_(payload, source) {
   payload = payload || {};
   const attendance = requireAttendanceSpreadsheet_();
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   const employeeCode = normalizeCode_(payload.employeeCode);
   const employee = getEmployeeRowByCode_(attendance, employeeCode);
   if (!employee) throw new Error('Select an active employee.');
@@ -4720,16 +4861,14 @@ function createTimeOffRequest_(payload, source) {
     '',
     notes
   ]]);
-  refreshPtoBalances_(attendance);
   applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.timeOffRequests, requestRange);
-  applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.ptoBalances);
   return { requestId, employeeCode, type };
 }
 
 function createMakeupHourRequest_(payload, source) {
   payload = payload || {};
   const attendance = requireAttendanceSpreadsheet_();
-  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none' });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   const employeeCode = normalizeCode_(payload.employeeCode);
   const employee = getEmployeeRowByCode_(attendance, employeeCode);
   if (!employee) throw new Error('Select an active employee.');
@@ -4829,18 +4968,15 @@ function refreshPtoBalances_(attendance) {
   return rows;
 }
 
-function getPtoBalanceSummaryForEmployee_(employeeCode, year) {
+function getPtoBalanceSummaryForEmployee_(employeeCode, year, attendance) {
   try {
-    const attendance = requireAttendanceSpreadsheet_();
+    attendance = attendance || requireAttendanceSpreadsheet_();
     if (!hasSheet_(attendance, CONFIG.attendanceTabs.ptoBalances)) {
       return buildUnavailablePtoBalanceSummary_('PTO balance unavailable. Attendance setup needs review.');
     }
     let summaries = getPtoBalanceSummariesByEmployee_(attendance, year);
-    if (!summaries[normalizeCode_(employeeCode)]) {
-      refreshPtoBalances_(attendance);
-      summaries = getPtoBalanceSummariesByEmployee_(attendance, year);
-    }
-    return summaries[normalizeCode_(employeeCode)] || null;
+    return summaries[normalizeCode_(employeeCode)]
+      || buildUnavailablePtoBalanceSummary_('PTO balance unavailable. Ask an admin to refresh PTO balances.');
   } catch (error) {
     return buildUnavailablePtoBalanceSummary_('PTO balance unavailable. Payroll setup needs review.');
   }
@@ -5634,13 +5770,14 @@ function appendRows_(sheet, rows) {
 
 function writeRowsReplacingData_(sheet, headers, rows) {
   ensureSheet_(sheet.getParent(), sheet.getName(), headers);
-  const maxRows = sheet.getMaxRows();
-  if (maxRows > 1) {
-    sheet.getRange(2, 1, maxRows - 1, sheet.getMaxColumns()).clearContent();
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, sheet.getMaxColumns()).clearContent();
   }
   if (rows.length) {
     sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
   }
+  return { startRow: rows.length ? 2 : 0, rowCount: rows.length };
 }
 
 function mapByCode_(rows) {
@@ -5649,6 +5786,44 @@ function mapByCode_(rows) {
     map[normalizeCode_(row['Employee Code'])] = row;
   });
   return map;
+}
+
+function groupRowsByEmployee_(rows) {
+  const grouped = {};
+  (rows || []).forEach(row => {
+    const code = normalizeCode_(row['Employee Code']);
+    if (!code) return;
+    if (!grouped[code]) grouped[code] = [];
+    grouped[code].push(row);
+  });
+  return grouped;
+}
+
+function getEmployeeScopedRows_(groupedRows, fallbackRows, employeeCode) {
+  const code = normalizeCode_(employeeCode);
+  if (groupedRows) return groupedRows[code] || [];
+  return (fallbackRows || []).filter(row => normalizeCode_(row['Employee Code']) === code);
+}
+
+function buildBonusSummaryIndex_(bonusRows) {
+  const index = {};
+  (bonusRows || []).forEach(row => {
+    const periodId = normalizePeriodId_(row['Pay Period ID']);
+    const code = normalizeCode_(row['Employee Code']);
+    if (!periodId || !code) return;
+    const key = `${periodId}|${code}`;
+    if (!index[key]) {
+      index[key] = { kpi: 0, additional: 0, positive: 0, negative: 0, notes: [] };
+    }
+    const type = row['Type (KPI / Additional / Positive Adj / Negative Adj)'];
+    const amount = toNumberOrZero_(row.Amount);
+    if (type === 'KPI') index[key].kpi += amount;
+    if (type === 'Additional') index[key].additional += amount;
+    if (type === 'Positive Adj') index[key].positive += amount;
+    if (type === 'Negative Adj') index[key].negative += amount;
+    if (row.Description) index[key].notes.push(`${type}: ${row.Description}`);
+  });
+  return index;
 }
 
 function listEmployeesForUi_() {

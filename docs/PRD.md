@@ -132,7 +132,7 @@ Each phase is independently deployable. Do not start the next phase until the cu
 - Payroll Sheet structure: Compensation Master, Pay Periods, Payroll Calculations, Payroll Output
 - Compensation seeded with 8 active employees
 - Apps Script: cross-sheet read + pay-period calculator
-- Calculations: base salary, late-minute deductions, absence deductions
+- Calculations: base salary, short-hours deductions, absence deductions, and late-minute tracking for attendance bonus
 - "Calculate Pay Period" menu + dialog
 - Output: per-employee summary for the selected period
 
@@ -443,7 +443,7 @@ day_late_minutes  = late_clock_in + late_lunch_return
 ```
 
 Aggregated:
-- **Per pay period** → late-minute deduction
+- **Per pay period** → displayed for review; no direct base-pay deduction
 - **Per calendar month** → attendance bonus eligibility (90-min cap)
 
 ### 7.3 Payable hours
@@ -467,12 +467,14 @@ base_salary_pre = sum across all scheduled days in pay period of:
 ### 7.5 Deductions
 
 ```
-late_deduction      = (total_late_minutes_in_period / 60) × hourly_base_rate
+late_deduction      = 0
 short_hours_ded     = unpaid_short_hours_in_period × hourly_base_rate
 absence_deduction   = unpaid_absent_days × 8 × hourly_base_rate
 uto_deduction       = uto_hours_in_period × hourly_base_rate
-total_deductions    = late_deduction + short_hours_ded + absence_deduction + uto_deduction
+total_deductions    = short_hours_ded + absence_deduction + uto_deduction
 ```
+
+Late minutes are retained in Attendance Log, Payroll Calculations, scorecards, and attendance bonus eligibility, but they do not directly reduce base pay.
 
 ### 7.6 Benefits (split + prorate)
 

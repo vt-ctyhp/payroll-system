@@ -90,6 +90,13 @@
         text-transform: uppercase;
         color: var(--ink-primary);
       }
+      .status-phrase {
+        margin: 14px 0 0;
+        color: var(--ink-primary);
+        font-family: var(--serif);
+        font-size: 22px;
+        line-height: 1.18;
+      }
 
       /* Buttons */
       .buttons {
@@ -414,6 +421,51 @@
 
     <script>
       const STORAGE_KEY = 'payrollClockIdentity';
+      const PHRASE_STORAGE_KEY = 'payrollClockStatusPhrase';
+      const STATUS_PHRASES = {
+        CLOCK_IN: [
+          "There they are! Let's get it.",
+          "Morning, superstar. Coffee's somewhere.",
+          'Logged on and looking good.',
+          'Look who decided to be amazing today.',
+          "Clocking in like it's nothing. Iconic."
+        ],
+        LUNCH_START: [
+          'Eat something that makes you happy.',
+          'Go feed the genius.',
+          'Soup. Sandwich. Salad. World is your oyster.',
+          'The fridge has been waiting for you.',
+          "Snack o'clock, baby."
+        ],
+        LUNCH_END: [
+          'Welcome back, fed and formidable.',
+          "Belly full. Brain online. Let's go.",
+          'Okay okay okay \u2014 here we go.',
+          'Reporting for duty, now with snacks digesting.',
+          'Post-lunch you is the best you. Fact.'
+        ],
+        BREAK_START: [
+          'Touch some grass. Or just the wall.',
+          "Stretch like nobody's watching.",
+          'Quick vibe check break.',
+          "Go look at something that isn't a screen.",
+          'Permission slip: do absolutely nothing.'
+        ],
+        BREAK_END: [
+          "And we're so back.",
+          'Okay, where were we.',
+          'Back online. Beep boop.',
+          'Reset complete. Vibes restored.',
+          'The break was great. The comeback is greater.'
+        ],
+        CLOCK_OUT: [
+          "That's a wrap! You crushed it today.",
+          'Wrapping it up like a pro.',
+          'Done done DONE. Enjoy your evening.',
+          'Goodnight, MVP.',
+          'Today happened and you were great in it. Goodnight.'
+        ]
+      };
       let latestState = null;
       let latestReview = null;
       let latestReviewMode = 'currentPeriod';
@@ -458,6 +510,7 @@
         const summary = state.todaySummary.map(item => `<li>${escapeHtml(item)}</li>`).join('');
         const balance = renderBalanceLine(state.ptoBalance);
         const timesheetSummary = renderTimesheetSummaryLine(state.timesheetSummary);
+        const phrase = pickStatusPhrase(state);
 
         document.getElementById('app').innerHTML = `
           <p class="eyebrow">Time &amp; Attendance</p>
@@ -466,6 +519,7 @@
           <div class="time">${escapeHtml(state.timeLabel)}</div>
           <hr class="rule">
           <div class="state">${escapeHtml(state.currentState)}</div>
+          ${phrase ? `<p class="status-phrase">${escapeHtml(phrase)}</p>` : ''}
           <div class="buttons">${buttons}</div>
           <div class="utility-grid">
             <button type="button" class="secondary" onclick="showTimeOffForm()">Request Time Off</button>
@@ -834,6 +888,27 @@
           return `<p class="balance-line">${escapeHtml(summary.message || 'Timesheet review unavailable.')}</p>`;
         }
         return `<p class="balance-line">Timesheet review: ${escapeHtml(summary.openIssues || 0)} open issue(s), ${escapeHtml(summary.pendingRevisions || 0)} pending revision(s).</p>`;
+      }
+
+      function pickStatusPhrase(state) {
+        const eventType = state.lastEventType || 'CLOCK_IN';
+        const phrases = STATUS_PHRASES[eventType] || [];
+        if (!phrases.length) return '';
+        const key = [
+          state.employee && state.employee.employeeCode,
+          state.dateLabel,
+          eventType,
+          (state.todaySummary || []).join('|')
+        ].join('::');
+        try {
+          const cached = JSON.parse(sessionStorage.getItem(PHRASE_STORAGE_KEY) || '{}');
+          if (cached.key === key && cached.phrase) return cached.phrase;
+          const phrase = phrases[Math.floor(Math.random() * phrases.length)];
+          sessionStorage.setItem(PHRASE_STORAGE_KEY, JSON.stringify({ key, phrase }));
+          return phrase;
+        } catch (error) {
+          return phrases[Math.floor(Math.random() * phrases.length)];
+        }
       }
 
       function formatBalance(value) {
