@@ -48,11 +48,11 @@ We are moving **off Jibble entirely** and building a self-contained Google Sheet
 | **Scheduled day** | A day the employee is expected to work per their work schedule. |
 | **Scheduled hours** | The 8 hours expected on a scheduled day (the "8-hour daily cap"). |
 | **Payable hours** | Hours that count toward base salary, capped at 8/day unless makeup hours are approved. |
-| **Late minutes** | `actual_clock_in − scheduled_start_time`, plus `actual_lunch_return − scheduled_lunch_end` if applicable. Aggregated per pay period (for base salary deduction) and per month (for attendance bonus). |
+| **Late minutes** | `actual_clock_in − scheduled_start_time`, plus `actual_lunch_return − scheduled_lunch_end` if a scheduled lunch exists. Aggregated for scorecards and attendance bonus, not direct base-pay deduction. |
 | **Makeup hours** | Hours worked beyond the 8-hour cap that are explicitly approved by management. Required to lift the cap. |
 | **PTO** | Paid Time Off. Drawn from the employee's PTO plan balance. Does NOT count against attendance bonus. |
 | **Fixed Annual PTO** | Employee receives a fixed annual PTO allowance. Unused fixed annual PTO is not cash-payout eligible when the employee leaves before year-end. |
-| **Accrued Monthly PTO** | Employee earns PTO by completed full calendar months worked. Unused earned PTO is payout-eligible on offboarding at `1.5 × daily base rate`, excluding benefits. |
+| **Accrued Monthly PTO** | Employee earns PTO hours by completed full calendar months worked. Unused earned PTO hours are payout-eligible on offboarding at `1.5 × hourly base rate`, excluding benefits. |
 | **UTO** | Unpaid Time Off. Counts against attendance bonus. Reduces base salary. |
 | **Non-PTO** | Approved time off not charged against PTO balance and not paid. Counts against attendance bonus. |
 | **Attendance bonus (PA)** | "Perfect Attendance" bonus paid on the 15th payroll, for the previous full month. Requires no disqualifying absences AND ≤ 90 total late minutes. |
@@ -242,17 +242,19 @@ Auto-rebuilt by the script from Clock Events whenever the Payroll Sheet runs a c
 
 #### Tab: `Time Off Requests` (Phase 4)
 
-| Request ID | Employee Code | Type (PTO/UTO/Non-PTO) | Start Date | End Date | Hours/Days | Reason | Status (Pending/Approved/Denied) | Approved By | Approved At | Notes |
-|---|---|---|---|---|---|---|---|---|---|---|
+| Request ID | Employee Code | Type (PTO/UTO/Non-PTO) | Start Date | End Date | Requested Hours | Reason | Status (Pending/Approved/Denied) | Approved By | Approved At | Notes | Start Time | End Time | Full Day? |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+
+Time off is tracked in hours only. Full-day requests use the scheduled shift length minus a standard 1 unpaid lunch hour. Partial-day requests require `HH:MMam/pm` start/end times, must stay inside the scheduled shift, and do not subtract lunch automatically because lunch is flexible.
 
 #### Tab: `PTO Balances` (Phase 4)
 
-| Employee Code | Year | PTO Plan Type | Annual PTO Allowance | Monthly PTO Accrual Days | Earned PTO | Used PTO | Remaining PTO | Payout Eligible PTO | Annual Non-PTO Allowance | Used Non-PTO | Remaining Non-PTO |
+| Employee Code | Year | PTO Plan Type | Annual PTO Hours | Monthly PTO Accrual Hours | Earned PTO Hours | Used PTO Hours | Remaining PTO Hours | Payout Eligible PTO Hours | Annual Non-PTO Hours | Used Non-PTO Hours | Remaining Non-PTO Hours |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 
 Allowance values mirror the Compensation Master but never include dollar values.
-For `Fixed Annual`, `Earned PTO = Annual PTO Days`, `Remaining PTO = Annual PTO Days - Used PTO`, and mid-year offboarding does not create a PTO payout.
-For `Accrued Monthly`, `Earned PTO = Monthly PTO Accrual Days × completed full calendar months worked in the year`; a month counts only if the employee was active for the entire calendar month. `Payout Eligible PTO = max(0, Remaining PTO)`.
+For `Fixed Annual`, `Earned PTO Hours = Annual PTO Hours`, `Remaining PTO Hours = Annual PTO Hours - Used PTO Hours`, and mid-year offboarding does not create a PTO payout.
+For `Accrued Monthly`, `Earned PTO Hours = Monthly PTO Accrual Hours × completed full calendar months worked in the year`; a month counts only if the employee was active for the entire calendar month. `Payout Eligible PTO Hours = max(0, Remaining PTO Hours)`.
 
 #### Tab: `Makeup Hour Requests` (Phase 4)
 
@@ -281,10 +283,10 @@ A formatted view (one employee at a time, dropdown selector). See §9.
 
 One row per employee per ramp-up tier per effective period. Effective-dated so we never lose history.
 
-| Employee Code | Effective From | Effective To | Ramp Tier | Monthly Base Salary | Monthly Benefits | Monthly Attendance Bonus | Monthly KPI Bonus (Max) | Quarterly PA Bonus | Annual PTO Days | Annual Non-PTO Days | Notes | PTO Plan Type | Monthly PTO Accrual Days |
+| Employee Code | Effective From | Effective To | Ramp Tier | Monthly Base Salary | Monthly Benefits | Monthly Attendance Bonus | Monthly KPI Bonus (Max) | Quarterly PA Bonus | Annual PTO Hours | Annual Non-PTO Hours | Notes | PTO Plan Type | Monthly PTO Accrual Hours |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 
-Existing rows default to `Fixed Annual`. `Annual PTO Days` remains the fixed-plan allowance. `Monthly PTO Accrual Days` is used only when `PTO Plan Type = Accrued Monthly`.
+Existing rows default to `Fixed Annual`. `Annual PTO Hours` is the fixed-plan allowance. `Monthly PTO Accrual Hours` is used only when `PTO Plan Type = Accrued Monthly`. Legacy day values migrate at `8 hours = 1 day`.
 
 #### Tab: `Pay Periods`
 
@@ -469,7 +471,7 @@ base_salary_pre = sum across all scheduled days in pay period of:
 ```
 late_deduction      = 0
 short_hours_ded     = unpaid_short_hours_in_period × hourly_base_rate
-absence_deduction   = unpaid_absent_days × 8 × hourly_base_rate
+absence_deduction   = unpaid_absent_hours × hourly_base_rate
 uto_deduction       = uto_hours_in_period × hourly_base_rate
 total_deductions    = short_hours_ded + absence_deduction + uto_deduction
 ```
@@ -583,8 +585,8 @@ USD throughout. Internal calculations carry full precision. Display values round
 
 **Add New Employee dialog (Phase 1):**
 - Fields: Full Name, Display Name, Employee Code (auto-suggested from name), Email, Position, Manager, Department, Start Date
-- Work schedule grid: checkbox per weekday with start/end time inputs, plus scheduled lunch
-- Compensation fields (only visible to payroll processor — assistants get a simpler form): Monthly Base, Benefits, Attendance Bonus, KPI Max, Quarterly PA, Annual PTO Days, Annual Non-PTO Days, PTO Plan Type, Monthly PTO Accrual Days
+- Work schedule grid: checkbox per weekday with start/end time inputs, plus optional scheduled lunch
+- Compensation fields (only visible to payroll processor — assistants get a simpler form): Monthly Base, Benefits, Attendance Bonus, KPI Max, Quarterly PA, Annual PTO Hours, Annual Non-PTO Hours, PTO Plan Type, Monthly PTO Accrual Hours
 - Save → creates rows in Employees + Work Schedules (Attendance Sheet) AND Compensation Master (Payroll Sheet) AND logs to Employee Lifecycle Log
 - Two-mode dialog: assistant version creates Employees + Work Schedules only; processor must complete the comp setup separately
 
@@ -603,7 +605,7 @@ USD throughout. Internal calculations carry full precision. Display values round
 - Dropdown: select employee
 - Shows current comp values
 - New value fields (only fill what's changing)
-- Includes PTO Plan Type and Monthly PTO Accrual Days so PTO structure changes are logged with the rest of compensation history
+- Includes PTO Plan Type and Monthly PTO Accrual Hours so PTO structure changes are logged with the rest of compensation history
 - Effective From (defaults to 1st of next month)
 - Reason (required)
 - "Retroactive?" checkbox — if checked, asks for the retroactive period and auto-generates an adjustment line for the next payroll
@@ -619,7 +621,7 @@ USD throughout. Internal calculations carry full precision. Display values round
 **Reactivate Employee dialog (Phase 5):**
 - Dropdown: select inactive/resigned/terminated employee
 - Fields: New Start Date, Position (defaults to last position), Manager
-- Work schedule grid + new comp values, including PTO Plan Type and Monthly PTO Accrual Days (does NOT reuse old comp; rehire is treated as a new offer)
+- Work schedule grid + new comp values, including PTO Plan Type and Monthly PTO Accrual Hours (does NOT reuse old comp; rehire is treated as a new offer)
 - Confirm → sets Status = Active, clears End Date, appends NEW rows in Work Schedules and Compensation Master (with the new Start Date as Effective From), logs in Employee Lifecycle Log
 - Old historical rows remain in place; the new rows sit alongside them, clearly distinguished by their effective dates
 
@@ -707,7 +709,7 @@ If NOT earned, the top section flips to red and lists the failure reasons explic
 
 - **Two separate Google Sheets** with separate share lists
 - Apps Script in the Payroll Sheet pulls from the Attendance Sheet using the script's authority, so even if an assistant has Edit access to the Attendance Sheet, they cannot trigger payroll calculations
-- The PTO Balance tab in the Attendance Sheet shows day counts, plan type, earned PTO, remaining PTO, and payout-eligible days, never payout dollars
+- The PTO Balance tab in the Attendance Sheet shows hour counts, plan type, earned PTO hours, remaining PTO hours, and payout-eligible hours, never payout dollars
 - Scorecards show attendance data only, never pay
 - The Web App writes only to Clock Events and Timestamp Revision Requests (Attendance Sheet) — it never touches the Payroll Sheet
 - All comp changes and lifecycle events are logged with timestamps and user emails
@@ -719,12 +721,12 @@ If NOT earned, the top section flips to red and lists the failure reasons explic
 
 Sourced from `_MASTER__Compensation_Plans.xlsx`. **Best-guess assumption: all employees on their "Officialized" tier.** Please verify before going live.
 
-| Employee | Schedule | Monthly Base (incl. benefits) | Benefits | KPI Max | Att. Bonus | Quarterly PA | Annual PTO | Annual Non-PTO | Source sheet |
+| Employee | Schedule | Monthly Base (incl. benefits) | Benefits | KPI Max | Att. Bonus | Quarterly PA | Annual PTO Hours | Annual Non-PTO Hours | Source sheet |
 |---|---|---|---|---|---|---|---|---|---|
-| Mark | Sun-Thu 10:00am-07:00pm | $1,100 | $75 | $150 | $100 | $150 | 4 | 4 | "Rolly (Mark)" |
-| Paul | Mon-Thu, Sat 10:00am-07:00pm | $600 | $75 | $100 | $100 | $150 | 4 | 4 | "Paul" |
-| Andrea | M-F 10:00am-07:00pm | $770 | $120 | $80 | $50 | $150 | 4 | 4 | "Andrea" |
-| Charisse | M-F 10:00am-07:00pm | $750 | $100 | ~$150 (G7×0.20) | $50 | $150 | 4 | 4 | "Charisse" |
+| Mark | Sun-Thu 10:00am-07:00pm | $1,100 | $75 | $150 | $100 | $150 | 32 | 32 | "Rolly (Mark)" |
+| Paul | Mon-Thu, Sat 10:00am-07:00pm | $600 | $75 | $100 | $100 | $150 | 32 | 32 | "Paul" |
+| Andrea | M-F 10:00am-07:00pm | $770 | $120 | $80 | $50 | $150 | 32 | 32 | "Andrea" |
+| Charisse | M-F 10:00am-07:00pm | $750 | $100 | ~$150 (G7×0.20) | $50 | $150 | 32 | 32 | "Charisse" |
 | Alli (Mae) | M-F 11:00am-08:00pm | TBD | TBD | TBD | TBD | TBD | TBD | TBD | "ALLI MAE" |
 | Adrian | M-F 10:00am-07:00pm | TBD — no sheet found | — | — | — | — | — | — | — |
 | Camille | M-T, F-Sun 10:00am-07:00pm | TBD — no sheet found | — | — | — | — | — | — | — |
@@ -739,7 +741,7 @@ Sourced from `_MASTER__Compensation_Plans.xlsx`. **Best-guess assumption: all em
 
 1. **Active tier confirmation** for Mark, Paul, Andrea, Charisse — Officialized or higher? *(See §12)*
 2. **Comp plans** for Alli, Adrian, Camille, Alexis — please provide values. *(See §12)*
-3. **Lunch policy:** Does every employee have a fixed scheduled lunch, or is lunch flexible? Affects how we calculate "late from lunch." *(Default assumption: fixed scheduled lunch per employee.)*
+3. **Lunch policy:** Resolved for time off: lunch is flexible, so partial-day time off does not subtract lunch automatically. Full-day time off subtracts one standard unpaid lunch hour.
 4. **Late grace period:** Is there one (e.g., clock in within 1 min of start = not late)? *(Default: zero grace; 1 minute late = 1 late minute.)*
 5. **Quarterly PA bonus:** Confirm we keep it.
 6. **Adrian, Camille, Alexis** — new hires? Their start dates and probationary status affect first month's comp.
@@ -747,7 +749,7 @@ Sourced from `_MASTER__Compensation_Plans.xlsx`. **Best-guess assumption: all em
 8. **Holidays calendar** — who maintains it? Fill in 2026 holidays before going live.
 9. **Time zones** — Confirm all logged times are in employee local time, not US PST, and confirm whether all employees are in the same time zone.
 10. **Web app authentication** — Do all employees have Google accounts? If not, we'll fall back to the PIN approach for those people.
-11. **PTO payout policy** — Resolved: the system supports `Fixed Annual` and `Accrued Monthly` PTO. Existing rows default to `Fixed Annual`. Fixed Annual unused PTO does not create a mid-year cash payout on offboarding. Accrued Monthly unused earned PTO is paid in final payroll as a Positive Adj at `payout eligible PTO days × daily base rate × 1.5`, using base pay only and excluding benefits.
+11. **PTO payout policy** — Resolved: the system supports `Fixed Annual` and `Accrued Monthly` PTO hours. Existing rows default to `Fixed Annual`. Fixed Annual unused PTO does not create a mid-year cash payout on offboarding. Accrued Monthly unused earned PTO is paid in final payroll as a Positive Adj at `payout eligible PTO hours × hourly base rate × 1.5`, using base pay only and excluding benefits.
 
 ---
 

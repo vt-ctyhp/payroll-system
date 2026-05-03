@@ -29,6 +29,8 @@ const CONFIG = {
   departments: ['Operations', 'HR', 'Marketing', 'Advertising'],
   sheetTimeFormat: 'hh:mmam/pm',
   sheetDateTimeFormat: 'yyyy-mm-dd hh:mmam/pm',
+  legacyDayHours: 8,
+  standardFullDayLunchHours: 1,
   requestStatuses: ['Pending', 'Approved', 'Denied'],
   attendanceTabs: {
     employees: 'Employees',
@@ -160,26 +162,29 @@ const HEADERS = {
     'Type (PTO/UTO/Non-PTO)',
     'Start Date',
     'End Date',
-    'Hours/Days',
+    'Requested Hours',
     'Reason',
     'Status (Pending/Approved/Denied)',
     'Approved By',
     'Approved At',
-    'Notes'
+    'Notes',
+    'Start Time',
+    'End Time',
+    'Full Day?'
   ],
   ptoBalances: [
     'Employee Code',
     'Year',
     'PTO Plan Type',
-    'Annual PTO Allowance',
-    'Monthly PTO Accrual Days',
-    'Earned PTO',
-    'Used PTO',
-    'Remaining PTO',
-    'Payout Eligible PTO',
-    'Annual Non-PTO Allowance',
-    'Used Non-PTO',
-    'Remaining Non-PTO'
+    'Annual PTO Hours',
+    'Monthly PTO Accrual Hours',
+    'Earned PTO Hours',
+    'Used PTO Hours',
+    'Remaining PTO Hours',
+    'Payout Eligible PTO Hours',
+    'Annual Non-PTO Hours',
+    'Used Non-PTO Hours',
+    'Remaining Non-PTO Hours'
   ],
   makeupRequests: [
     'Request ID',
@@ -217,11 +222,11 @@ const HEADERS = {
     'Monthly Attendance Bonus',
     'Monthly KPI Bonus (Max)',
     'Quarterly PA Bonus',
-    'Annual PTO Days',
-    'Annual Non-PTO Days',
+    'Annual PTO Hours',
+    'Annual Non-PTO Hours',
     'Notes',
     'PTO Plan Type',
-    'Monthly PTO Accrual Days'
+    'Monthly PTO Accrual Hours'
   ],
   periods: ['Period ID', 'Pay Date', 'Period Start', 'Period End', 'Period Type (Mid / EOM)', 'Status (Open / Calculated / Paid)'],
   calculations: [
@@ -312,7 +317,7 @@ const INITIAL_EMPLOYEES = [
     fullName: 'Mark',
     displayName: 'Mark',
     schedule: { days: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu'], start: 10, end: 19, lunchStart: 13, lunchEnd: 14 },
-    comp: { tier: 'Officialized', base: 1100, benefits: 75, attendance: 100, kpi: 150, quarterly: 150, pto: 4, nonPto: 4 },
+    comp: { tier: 'Officialized', base: 1100, benefits: 75, attendance: 100, kpi: 150, quarterly: 150, pto: 32, nonPto: 32 },
     notes: 'Seeded from PRD §12; verify active tier before go-live.'
   },
   {
@@ -320,7 +325,7 @@ const INITIAL_EMPLOYEES = [
     fullName: 'Paul',
     displayName: 'Paul',
     schedule: { days: ['Mon', 'Tue', 'Wed', 'Thu', 'Sat'], start: 10, end: 19, lunchStart: 13, lunchEnd: 14 },
-    comp: { tier: 'Officialized', base: 600, benefits: 75, attendance: 100, kpi: 100, quarterly: 150, pto: 4, nonPto: 4 },
+    comp: { tier: 'Officialized', base: 600, benefits: 75, attendance: 100, kpi: 100, quarterly: 150, pto: 32, nonPto: 32 },
     notes: 'Seeded from PRD §12; verify active tier before go-live.'
   },
   {
@@ -328,7 +333,7 @@ const INITIAL_EMPLOYEES = [
     fullName: 'Andrea',
     displayName: 'Andrea',
     schedule: { days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], start: 10, end: 19, lunchStart: 13, lunchEnd: 14 },
-    comp: { tier: 'Officialized', base: 770, benefits: 120, attendance: 50, kpi: 80, quarterly: 150, pto: 4, nonPto: 4 },
+    comp: { tier: 'Officialized', base: 770, benefits: 120, attendance: 50, kpi: 80, quarterly: 150, pto: 32, nonPto: 32 },
     notes: 'Seeded from PRD §12; verify active tier before go-live.'
   },
   {
@@ -336,7 +341,7 @@ const INITIAL_EMPLOYEES = [
     fullName: 'Charisse',
     displayName: 'Charisse',
     schedule: { days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], start: 10, end: 19, lunchStart: 13, lunchEnd: 14 },
-    comp: { tier: 'Officialized', base: 750, benefits: 100, attendance: 50, kpi: 150, quarterly: 150, pto: 4, nonPto: 4 },
+    comp: { tier: 'Officialized', base: 750, benefits: 100, attendance: 50, kpi: 150, quarterly: 150, pto: 32, nonPto: 32 },
     notes: 'Seeded from PRD §12. KPI max is PRD estimate; verify active tier before go-live.'
   },
   {
@@ -987,6 +992,20 @@ function submitTimeOffRequest(payload) {
   };
 }
 
+function previewTimeOffRequest(payload) {
+  payload = payload || {};
+  const attendance = requireAttendanceSpreadsheet_();
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
+  const employeeCode = normalizeCode_(payload.employeeCode);
+  if (!employeeCode) throw new Error('Employee is required.');
+  const calculation = calculateTimeOffRequestFromPayload_(attendance, employeeCode, payload);
+  return {
+    requestedHours: round2_(calculation.requestedHours),
+    label: `${round2_(calculation.requestedHours)} hour(s)`,
+    note: calculation.note || ''
+  };
+}
+
 function submitWebTimeOffRequest(payload) {
   payload = payload || {};
   const employee = resolveWebAppEmployee_(payload.identity);
@@ -997,6 +1016,15 @@ function submitWebTimeOffRequest(payload) {
   return {
     message: `${result.type} request submitted. Manager approval is required before payroll uses it.`
   };
+}
+
+function previewWebTimeOffRequest(payload) {
+  payload = payload || {};
+  const employee = resolveWebAppEmployee_(payload.identity);
+  if (!employee) throw new Error('Could not identify an active employee. Sign in again and retry.');
+  return previewTimeOffRequest(Object.assign({}, payload, {
+    employeeCode: employee['Employee Code']
+  }));
 }
 
 function getMakeupRequestDialogData() {
@@ -1264,7 +1292,10 @@ function getPendingRequestsDialogData() {
         type: row['Type (PTO/UTO/Non-PTO)'],
         startDate: displayDate_(row['Start Date']),
         endDate: displayDate_(row['End Date']),
-        units: toNumberOrBlank_(row['Hours/Days']),
+        units: toNumberOrBlank_(row['Requested Hours']),
+        startTime: row['Start Time'] || '',
+        endTime: row['End Time'] || '',
+        fullDay: row['Full Day?'] || '',
         reason: row.Reason || '',
         balance: balances[code] || null
       };
@@ -1689,11 +1720,11 @@ function saveCompensationChange_(payload) {
     toNumberOrBlank_(nextValues['Monthly Attendance Bonus']),
     toNumberOrBlank_(nextValues['Monthly KPI Bonus (Max)']),
     toNumberOrBlank_(nextValues['Quarterly PA Bonus']),
-    toNumberOrBlank_(nextValues['Annual PTO Days']),
-    toNumberOrBlank_(nextValues['Annual Non-PTO Days']),
+    toNumberOrBlank_(nextValues['Annual PTO Hours']),
+    toNumberOrBlank_(nextValues['Annual Non-PTO Hours']),
     String(payload.notes || '').trim() || reason,
     normalizePtoPlanType_(nextValues['PTO Plan Type']),
-    toNumberOrBlank_(nextValues['Monthly PTO Accrual Days'])
+    toNumberOrBlank_(nextValues['Monthly PTO Accrual Hours'])
   ]]);
 
   const approvedBy = getActiveUserEmail_();
@@ -1717,7 +1748,7 @@ function saveCompensationChange_(payload) {
     retroBonusRange = appendRows_(getSheet_(payroll, CONFIG.payrollTabs.bonuses), [retroAdjustment.row]);
   }
 
-  if (changes.some(change => ['Annual PTO Days', 'Annual Non-PTO Days', 'PTO Plan Type', 'Monthly PTO Accrual Days'].indexOf(change.field.header) !== -1)) {
+  if (changes.some(change => ['Annual PTO Hours', 'Annual Non-PTO Hours', 'PTO Plan Type', 'Monthly PTO Accrual Hours'].indexOf(change.field.header) !== -1)) {
     refreshPtoBalances_(attendance);
     applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.ptoBalances);
   }
@@ -1988,6 +2019,8 @@ function calculatePayPeriod_(payload) {
 
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   repairPayPeriodIds_(payroll);
   const periodSheet = getSheet_(payroll, CONFIG.payrollTabs.periods);
   const periodRows = readObjects_(periodSheet);
@@ -2063,6 +2096,13 @@ function rebuildAttendanceLog(options) {
   const events = getClockEvents_(ss, startDate, endOfDay_(endDate));
   const holidays = readObjects_(getSheet_(ss, CONFIG.attendanceTabs.holidays));
   const overrides = readAttendanceStatusOverrides_(ss, startDate, endDate);
+  const approvedTimeOffByKey = buildApprovedTimeOffHoursByDate_(
+    readObjects_(getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests)),
+    schedules,
+    '',
+    startDate,
+    endDate
+  );
   const eventsByKey = groupEventsByDateEmployee_(events);
   const rows = [];
 
@@ -2074,7 +2114,7 @@ function rebuildAttendanceLog(options) {
       const key = `${formatDateKey_(cursor)}|${code}`;
       const rowEvents = eventsByKey[key] || [];
       const overrideStatus = overrides[key];
-      rows.push(buildAttendanceLogRow_(cursor, employee, schedule, rowEvents, holidays, overrideStatus));
+      rows.push(buildAttendanceLogRow_(cursor, employee, schedule, rowEvents, holidays, overrideStatus, approvedTimeOffByKey[key]));
     });
   }
 
@@ -2155,6 +2195,7 @@ function setupAttendanceSpreadsheet_(ss, options) {
   ensureSheet_(ss, CONFIG.attendanceTabs.timestampRevisions, HEADERS.timestampRevisions);
   ensureScorecardSheet_(ss);
   if (runMigrations) migrateScheduleTimeDisplays_(ss);
+  migrateHourlyTimeOffRequests_(ss);
   removeDefaultBlankSheet_(ss);
   if (options.formatMode !== 'none') applyAttendanceFormatting_(ss);
 }
@@ -2174,6 +2215,7 @@ function setupPayrollSpreadsheet_(ss, options) {
     seedPayPeriods_(ss, new Date().getFullYear());
     migratePtoPlanDefaults_(ss);
   }
+  migrateHourlyPtoComp_(ss);
   removeDefaultBlankSheet_(ss);
   if (options.formatMode !== 'none') applyPayrollFormatting_(ss);
 }
@@ -2184,7 +2226,7 @@ function migratePtoPlanDefaults_(payroll) {
   if (values.length < 2) return 0;
   const headers = values[0];
   const planIdx = headers.indexOf('PTO Plan Type');
-  const accrualIdx = headers.indexOf('Monthly PTO Accrual Days');
+  const accrualIdx = headers.indexOf('Monthly PTO Accrual Hours');
   if (planIdx === -1 || accrualIdx === -1) return 0;
 
   let updated = 0;
@@ -2197,6 +2239,71 @@ function migratePtoPlanDefaults_(payroll) {
       updated += 1;
     }
   }
+  return updated;
+}
+
+function migrateHourlyPtoComp_(payroll) {
+  const propertyKey = `HOURLY_PTO_COMP_MIGRATED_${payroll.getId()}`;
+  const properties = PropertiesService.getScriptProperties();
+  if (properties.getProperty(propertyKey) === 'true') return 0;
+
+  const sheet = getSheet_(payroll, CONFIG.payrollTabs.comp);
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) {
+    properties.setProperty(propertyKey, 'true');
+    return 0;
+  }
+  const headers = values[0];
+  const hourHeaders = ['Annual PTO Hours', 'Annual Non-PTO Hours', 'Monthly PTO Accrual Hours'];
+  const indexes = hourHeaders.map(header => headers.indexOf(header)).filter(index => index !== -1);
+  let updated = 0;
+  for (let row = 1; row < values.length; row += 1) {
+    indexes.forEach(index => {
+      const value = toNumberOrBlank_(values[row][index]);
+      if (value === '') return;
+      sheet.getRange(row + 1, index + 1).setValue(round2_(value * CONFIG.legacyDayHours));
+      updated += 1;
+    });
+  }
+  properties.setProperty(propertyKey, 'true');
+  return updated;
+}
+
+function migrateHourlyTimeOffRequests_(attendance) {
+  const propertyKey = `HOURLY_TIME_OFF_REQUESTS_MIGRATED_${attendance.getId()}`;
+  const properties = PropertiesService.getScriptProperties();
+  if (properties.getProperty(propertyKey) === 'true') return 0;
+
+  const sheet = getSheet_(attendance, CONFIG.attendanceTabs.timeOffRequests);
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) {
+    properties.setProperty(propertyKey, 'true');
+    return 0;
+  }
+  const headers = values[0];
+  const requestedHoursIdx = headers.indexOf('Requested Hours');
+  const notesIdx = headers.indexOf('Notes');
+  const startTimeIdx = headers.indexOf('Start Time');
+  const endTimeIdx = headers.indexOf('End Time');
+  const fullDayIdx = headers.indexOf('Full Day?');
+  if ([requestedHoursIdx, notesIdx, startTimeIdx, endTimeIdx, fullDayIdx].some(index => index === -1)) return 0;
+
+  let updated = 0;
+  for (let row = 1; row < values.length; row += 1) {
+    const hasData = values[row].some(cell => cell !== '' && cell !== null);
+    if (!hasData) continue;
+    if (values[row][startTimeIdx] || values[row][endTimeIdx] || values[row][fullDayIdx]) continue;
+    const legacyUnits = toNumberOrBlank_(values[row][requestedHoursIdx]);
+    if (legacyUnits === '') continue;
+    const convertedHours = round2_(legacyUnits * CONFIG.legacyDayHours);
+    const existingNotes = String(values[row][notesIdx] || '').trim();
+    const migrationNote = `Legacy Hours/Days ${legacyUnits} converted to ${convertedHours} requested hours.`;
+    sheet.getRange(row + 1, requestedHoursIdx + 1).setValue(convertedHours);
+    sheet.getRange(row + 1, fullDayIdx + 1).setValue('Yes');
+    sheet.getRange(row + 1, notesIdx + 1).setValue([existingNotes, migrationNote].filter(Boolean).join(' | '));
+    updated += 1;
+  }
+  properties.setProperty(propertyKey, 'true');
   return updated;
 }
 
@@ -2447,13 +2554,16 @@ function buildAttendanceSummaryContext_(attendance) {
   const employeeRows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees));
   const schedules = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules));
   const attendanceRows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.log));
+  const timeOffRows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timeOffRequests));
   return {
     attendance,
     employees: mapByCode_(employeeRows),
     schedules,
     schedulesByEmployee: groupRowsByEmployee_(schedules),
     attendanceRows,
-    attendanceRowsByEmployee: groupRowsByEmployee_(attendanceRows)
+    attendanceRowsByEmployee: groupRowsByEmployee_(attendanceRows),
+    timeOffRows,
+    timeOffRowsByEmployee: groupRowsByEmployee_(timeOffRows)
   };
 }
 
@@ -2464,6 +2574,8 @@ function buildMonthlyAttendanceSummary_(context, employeeCode, monthStart) {
   if (!employee) throw new Error(`Employee ${code} was not found.`);
   const employeeAttendanceRows = getEmployeeScopedRows_(context.attendanceRowsByEmployee, context.attendanceRows, code);
   const employeeSchedules = getEmployeeScopedRows_(context.schedulesByEmployee, context.schedules, code);
+  const employeeTimeOffRows = getEmployeeScopedRows_(context.timeOffRowsByEmployee, context.timeOffRows, code);
+  const approvedTimeOffByKey = buildApprovedTimeOffHoursByDate_(employeeTimeOffRows, employeeSchedules, code, month.start, month.end);
 
   const rows = employeeAttendanceRows.filter(row => {
     const rowDate = parseDateOrBlank_(row.Date);
@@ -2501,6 +2613,7 @@ function buildMonthlyAttendanceSummary_(context, employeeCode, monthStart) {
   rows.forEach(row => {
     const date = parseDateOrBlank_(row.Date);
     const status = row.Status || '';
+    const leave = approvedTimeOffByKey[`${formatDateKey_(date)}|${code}`] || { uto: 0, nonPto: 0 };
     const clockIn = parseDateOrBlank_(row['Clock In']);
     const clockOut = parseDateOrBlank_(row['Clock Out']);
     const scheduledStart = parseDateOrBlank_(row['Scheduled Start']);
@@ -2549,12 +2662,17 @@ function buildMonthlyAttendanceSummary_(context, employeeCode, monthStart) {
     if (status === 'UTO') stats.utoDays += 1;
     if (status === 'Non-PTO') stats.nonPtoDays += 1;
     if (status === 'Incomplete (no clock-out)') stats.incompleteDays += 1;
+    if (status !== 'UTO' && status !== 'Non-PTO') {
+      if (leave.uto) stats.utoDays += 1;
+      if (leave.nonPto) stats.nonPtoDays += 1;
+    }
 
     const notes = [];
     if (lateClockIn) notes.push(`${lateClockIn} min late start`);
     if (lateLunch) notes.push(`${lateLunch} min late lunch`);
     if (missingLunch) notes.push('Missing lunch log');
     if (isDisqualifyingAttendanceStatus_(status)) notes.push('Disqualifying status');
+    if (leave.uto || leave.nonPto) notes.push('Approved unpaid time off');
     if (notes.length) {
       exceptionRows.push({
         date: formatDateKey_(date),
@@ -3353,8 +3471,8 @@ function getAttendanceWorkflowGuide_() {
           ['Holidays', 'Paid holiday exceptions.', 'Operations manager', 'Yes', 'Date, Paid?, Applies To', 'Use All unless the holiday is employee-specific.'],
           ['Clock Events', 'Append-only clock event ledger.', 'Employees and managers', 'Append only', 'Timestamp, Employee Code, Event Type, Source', 'Do not delete production events; add a corrective manual event instead.'],
           ['Attendance Log', 'Calculated daily status and payroll source.', 'Operations and payroll', 'Limited review', 'Status, Worked Hours, Late Minutes', 'Rebuild after source changes; override only PTO/UTO/Non-PTO/Holiday status.'],
-          ['Time Off Requests', 'Pending and approved PTO, UTO, and Non-PTO requests.', 'Employees and managers', 'Via dialog preferred', 'Type, dates, hours/days, status', 'Approve requests before payroll; approved rows rebuild into Attendance Log.'],
-          ['PTO Balances', 'Fixed Annual or Accrued Monthly PTO days, used days, remaining days, and payout-eligible days.', 'Operations manager', 'Script-updated', 'PTO plan, earned PTO, used PTO, remaining PTO, Non-PTO usage', 'Shows days only, never payout dollars; refresh after comp or request changes.'],
+          ['Time Off Requests', 'Pending and approved PTO, UTO, and Non-PTO requests.', 'Employees and managers', 'Via dialog preferred', 'Type, dates, requested hours, full-day flag, status', 'Approve requests before payroll; approved rows rebuild into Attendance Log.'],
+          ['PTO Balances', 'Fixed Annual or Accrued Monthly PTO hours, used hours, remaining hours, and payout-eligible hours.', 'Operations manager', 'Script-updated', 'PTO plan, earned PTO hours, used PTO hours, remaining PTO hours, Non-PTO usage', 'Shows hours only, never payout dollars; refresh after comp or request changes.'],
           ['Makeup Hour Requests', 'Pending and approved makeup hours.', 'Employees and managers', 'Via dialog preferred', 'Date, hours, status', 'Approved rows can offset short-hour deductions during payroll calculation.'],
           ['Timestamp Revision Requests', 'Employee-requested timestamp corrections awaiting payroll approval.', 'Employees and payroll', 'Via portal and Payroll menu', 'Original event, requested timestamp, status, correction event', 'Pending rows do not affect attendance; approved rows append a manual correction event.'],
           ['Scorecard', 'Shareable one-employee attendance scorecard.', 'Operations manager', 'Script-rendered', 'Bonus status, stats, exception days', 'Use Attendance > View Scorecard to refresh this tab.']
@@ -3381,7 +3499,7 @@ function getAttendanceWorkflowGuide_() {
         description: 'Run injectPhase1TestData() to populate a compact scenario that exercises the main edge cases.',
         headers: ['Employee', 'PIN', 'Scenario', 'Expected Review', 'Workbook Impact', 'Notes'],
         rows: [
-          ['MARK', PHASE1_TEST.pins.MARK, 'Late on 2026-04-08.', 'Late minutes and deduction should appear.', 'Attendance Log and Payroll Calculations', 'Tests late arrival and late lunch return.'],
+          ['MARK', PHASE1_TEST.pins.MARK, 'Late on 2026-04-08.', 'Late minutes should appear; Late Deduction stays 0.', 'Attendance Log and Payroll Calculations', 'Tests late tracking for attendance bonus without base-pay deduction.'],
           ['PAUL', PHASE1_TEST.pins.PAUL, 'Absent on scheduled Saturday 2026-04-04.', 'Absent day and deduction should appear.', 'Attendance Log and Payroll Calculations', 'No clock events are inserted for that day.'],
           ['ANDREA', PHASE1_TEST.pins.ANDREA, 'Short day on 2026-04-10.', 'Short hours deduction should appear.', 'Attendance Log and Payroll Calculations', 'Clock-out is before scheduled end.'],
           ['CHARISSE', PHASE1_TEST.pins.CHARISSE, 'Missing clock-out on 2026-04-14.', 'Payroll row should need review.', 'Attendance Log and Payroll Output', 'Calculated total remains blank until resolved.']
@@ -3410,7 +3528,7 @@ function getPayrollWorkflowGuide_() {
         headers: ['Step', 'Owner', 'Action', 'Where', 'When', 'Done When'],
         rows: [
           ['1', 'Operations manager', 'Approve pending time off and makeup requests, then rebuild Attendance Log for the target period.', 'Attendance workbook', 'Before calculation', 'Attendance statuses, approved leave, makeup hours, and late minutes are current.'],
-          ['2', 'Payroll processor', 'Review Compensation Master for blanks, effective dates, PTO Plan Type, and Monthly PTO Accrual Days.', 'Compensation Master', 'Before calculation', 'Every paid employee has an active compensation row and PTO plan terms are intentional.'],
+          ['2', 'Payroll processor', 'Review Compensation Master for blanks, effective dates, PTO Plan Type, and Monthly PTO Accrual Hours.', 'Compensation Master', 'Before calculation', 'Every paid employee has an active compensation row and PTO plan terms are intentional.'],
           ['3', 'Payroll processor', 'Confirm or create the target pay period.', 'Pay Periods', 'Each run', 'Period ID, dates, type, and status are correct.'],
           ['4', 'Payroll processor', 'Approve or deny pending timestamp revisions before closeout.', 'Payroll menu > Approve Timestamp Revisions', 'Before calculation', 'Approved rows append manual correction events and rebuild affected Attendance Log dates.'],
           ['5', 'Payroll processor', 'Enter KPI approvals, additional bonuses, and adjustments.', 'Payroll menu', 'Before calculation', 'Bonuses & Adjustments has approved entries with descriptions.'],
@@ -3428,7 +3546,7 @@ function getPayrollWorkflowGuide_() {
         description: 'The private workbook separates compensation inputs from calculated pay output.',
         headers: ['Tab', 'Purpose', 'Primary User', 'Editable?', 'Key Fields', 'UX Rule'],
         rows: [
-          ['Compensation Master', 'Private compensation, benefit, and PTO plan setup.', 'Payroll processor', 'Yes', 'Effective dates, salary, benefits, bonuses, PTO Plan Type, Monthly PTO Accrual Days', 'Existing rows default to Fixed Annual; leave unknown dollar values blank until confirmed.'],
+          ['Compensation Master', 'Private compensation, benefit, and PTO plan setup.', 'Payroll processor', 'Yes', 'Effective dates, salary, benefits, bonuses, PTO Plan Type, Monthly PTO Accrual Hours', 'Existing rows default to Fixed Annual; leave unknown dollar values blank until confirmed.'],
           ['Pay Periods', 'Calendar and status control for pay runs.', 'Payroll processor', 'Yes', 'Period ID, Pay Date, Start/End, Status', 'Use one row per pay period and keep IDs stable.'],
           ['Payroll Calculations', 'Detailed calculated pay and deductions.', 'Payroll approver', 'Review only', 'Worked Hours, Deductions, Calculated Total', 'Investigate Needs review before payment.'],
           ['Payroll Output', 'Compact export-facing payroll summary.', 'Payroll processor', 'Review then export', 'Base, Deductions, TOTAL, Status', 'Export only after exceptions are cleared or approved.'],
@@ -3452,8 +3570,8 @@ function getPayrollWorkflowGuide_() {
           ['Short hours deduction', 'Payroll Calculations', 'Short Hours > 0', 'Worked hours are below eight for a scheduled day.', 'Confirm early leave, correction, or override path.', 'Payroll approver'],
           ['Benefits', 'Payroll Calculations', 'Benefits and Benefit Eligible Days', 'Mid-month starts, exits, UTO, or Non-PTO can prorate benefits.', 'Review proration notes before approval.', 'Payroll approver'],
           ['Approved leave', 'Attendance Log', 'Status = PTO, UTO, or Non-PTO', 'A manager approved a time off request.', 'Confirm the approval and dates before paying.', 'Operations manager'],
-          ['PTO plan setup', 'Compensation Master', 'PTO Plan Type and Monthly PTO Accrual Days', 'Accrued Monthly earns only for full calendar months worked; Fixed Annual uses Annual PTO Days.', 'Confirm plan type before refresh or offboarding.', 'Payroll processor'],
-          ['PTO payout', 'Bonuses & Adjustments', 'Positive Adj description starts Accrued PTO payout', 'Only Accrued Monthly unused earned PTO is payout-eligible on offboarding at 1.5x daily base rate.', 'Fixed Annual mid-year unused PTO should not create an adjustment.', 'Payroll approver'],
+          ['PTO plan setup', 'Compensation Master', 'PTO Plan Type and Monthly PTO Accrual Hours', 'Accrued Monthly earns hours only for full calendar months worked; Fixed Annual uses Annual PTO Hours.', 'Confirm plan type before refresh or offboarding.', 'Payroll processor'],
+          ['PTO payout', 'Bonuses & Adjustments', 'Positive Adj description starts Accrued PTO payout', 'Only Accrued Monthly unused earned PTO hours are payout-eligible on offboarding at 1.5x hourly base rate.', 'Fixed Annual mid-year unused PTO should not create an adjustment.', 'Payroll approver'],
           ['Makeup hours', 'Payroll Calculations', 'Notes mention approved makeup hours', 'Approved makeup offset short-hour deductions.', 'Confirm unused hours are intentional.', 'Payroll approver'],
           ['Attendance bonus', 'Payroll Calculations', 'Attendance Bonus Status', 'Monthly eligibility is calculated after month close on Mid payrolls.', 'Review the status and notes before approving output.', 'Payroll approver'],
           ['Quarterly PA bonus', 'Quarterly PA Tracker', 'Eligible? = No or amount blank', 'One or more months were not perfect, or bonus amount is blank.', 'Review quarter details and Compensation Master.', 'Payroll processor'],
@@ -3467,7 +3585,7 @@ function getPayrollWorkflowGuide_() {
         headers: ['Action', 'Where', 'Primary Effect', 'Audit Trail', 'Payroll Effect', 'Owner'],
         rows: [
           ['Compensation Change', 'Payroll menu', 'Closes current Compensation Master row and appends a new one, including PTO plan fields when changed.', 'Compensation Change Log', 'Optional retroactive adjustment added to Bonuses & Adjustments.', 'Payroll processor'],
-          ['Offboard Employee', 'Payroll menu', 'Sets employee end date, closes schedule and comp rows, then marks status Resigned or Terminated.', 'Employee Lifecycle Log', 'Creates and calculates a FINAL pay period; Accrued Monthly unused PTO can be added as a Positive Adj at 1.5x base daily rate.', 'Payroll processor'],
+          ['Offboard Employee', 'Payroll menu', 'Sets employee end date, closes schedule and comp rows, then marks status Resigned or Terminated.', 'Employee Lifecycle Log', 'Creates and calculates a FINAL pay period; Accrued Monthly unused PTO can be added as a Positive Adj at 1.5x hourly base rate.', 'Payroll processor'],
           ['Reactivate Employee', 'Payroll menu', 'Sets employee Active and appends fresh schedule and compensation rows.', 'Employee Lifecycle Log', 'New terms apply from the new start date.', 'Payroll processor'],
           ['View logs', 'Payroll menu', 'Jumps to the audit log tabs.', 'No edit required', 'Use logs during approval review.', 'Payroll approver']
         ]
@@ -3531,6 +3649,7 @@ function buildPayrollContext_(attendance, payroll, periodStart, periodEnd) {
   const employeeRows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees));
   const schedules = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules));
   const attendanceRows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.log));
+  const timeOffRows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timeOffRequests));
   const makeupRows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.makeupRequests));
   const timestampRevisionRows = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timestampRevisions));
   const compRows = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp));
@@ -3543,6 +3662,8 @@ function buildPayrollContext_(attendance, payroll, periodStart, periodEnd) {
     schedulesByEmployee: groupRowsByEmployee_(schedules),
     attendanceRows,
     attendanceRowsByEmployee: groupRowsByEmployee_(attendanceRows),
+    timeOffRows,
+    timeOffRowsByEmployee: groupRowsByEmployee_(timeOffRows),
     makeupRows,
     makeupRowsByEmployee: groupRowsByEmployee_(makeupRows),
     timestampRevisionRows,
@@ -3586,7 +3707,7 @@ function calculateEmployeePay_(employeeCode, period, context) {
   }
 
   const dailyBaseRate = monthlyBase / scheduledDaysInMonth;
-  const hourlyBaseRate = dailyBaseRate / 8;
+  const hourlyBaseRate = dailyBaseRate / CONFIG.legacyDayHours;
   const periodLogRows = employeeAttendanceRows.filter(row => {
     const rowDate = parseDateOrBlank_(row.Date);
     return normalizeCode_(row['Employee Code']) === code
@@ -3600,24 +3721,31 @@ function calculateEmployeePay_(employeeCode, period, context) {
   let workedHours = 0;
   let lateMinutes = 0;
   let absentDays = 0;
+  let absenceHours = 0;
+  let paidTimeOffHours = 0;
+  let unpaidTimeOffHours = 0;
   let shortHours = 0;
   let incompleteDays = 0;
   const employeeMakeupRows = getEmployeeScopedRows_(context.makeupRowsByEmployee, context.makeupRows, code);
+  const employeeTimeOffRows = getEmployeeScopedRows_(context.timeOffRowsByEmployee, context.timeOffRows, code);
+  const approvedTimeOffByKey = buildApprovedTimeOffHoursByDate_(employeeTimeOffRows, employeeSchedules, code, periodStart, periodEnd);
   const approvedMakeupHours = sumApprovedMakeupHoursForPeriod_(employeeMakeupRows, code, periodStart, periodEnd);
   let remainingMakeupHours = approvedMakeupHours;
   let makeupHoursApplied = 0;
 
   periodLogRows.forEach(row => {
     const status = row.Status || '';
+    const date = parseDateOrBlank_(row.Date);
+    const leave = date ? (approvedTimeOffByKey[`${formatDateKey_(date)}|${code}`] || { pto: 0, unpaid: 0 }) : { pto: 0, unpaid: 0 };
+    const paidLeave = Math.min(CONFIG.legacyDayHours, toNumberOrZero_(leave.pto));
+    const unpaidLeave = Math.min(Math.max(0, CONFIG.legacyDayHours - paidLeave), toNumberOrZero_(leave.unpaid));
+    const coveredLeave = paidLeave + unpaidLeave;
     scheduledDays += 1;
     const worked = toNumberOrBlank_(row['Worked Hours']);
     const late = toNumberOrBlank_(row['Total Late Minutes']);
     lateMinutes += late === '' ? 0 : late;
+    paidTimeOffHours += paidLeave;
 
-    if (status === 'Absent' || status === 'UTO' || status === 'Non-PTO') {
-      absentDays += 1;
-      return;
-    }
     if (status === 'Incomplete (no clock-out)') {
       incompleteDays += 1;
       return;
@@ -3625,20 +3753,34 @@ function calculateEmployeePay_(employeeCode, period, context) {
     if (status === 'Holiday' || status === 'PTO') {
       return;
     }
-    if (worked !== '') {
-      const shortfall = Math.max(0, 8 - worked);
-      const appliedMakeup = Math.min(shortfall, remainingMakeupHours);
-      remainingMakeupHours -= appliedMakeup;
-      makeupHoursApplied += appliedMakeup;
-      workedHours += worked + appliedMakeup;
-      if (shortfall > appliedMakeup) shortHours += shortfall - appliedMakeup;
+    if ((status === 'UTO' || status === 'Non-PTO') && worked === '') {
+      const unpaidHours = unpaidLeave || CONFIG.legacyDayHours;
+      unpaidTimeOffHours += unpaidHours;
+      if (unpaidHours >= CONFIG.legacyDayHours) absentDays += 1;
+      return;
     }
+
+    unpaidTimeOffHours += unpaidLeave;
+    const workedValue = worked === '' ? 0 : worked;
+    if (status === 'Absent' && worked === '') {
+      const uncoveredAbsentHours = Math.max(0, CONFIG.legacyDayHours - coveredLeave);
+      absenceHours += uncoveredAbsentHours;
+      if (uncoveredAbsentHours >= CONFIG.legacyDayHours) absentDays += 1;
+      return;
+    }
+
+    const shortfall = Math.max(0, CONFIG.legacyDayHours - workedValue - coveredLeave);
+    const appliedMakeup = Math.min(shortfall, remainingMakeupHours);
+    remainingMakeupHours -= appliedMakeup;
+    makeupHoursApplied += appliedMakeup;
+    workedHours += workedValue + appliedMakeup;
+    if (shortfall > appliedMakeup) shortHours += shortfall - appliedMakeup;
   });
 
-  const scheduledBase = scheduledDays * 8 * hourlyBaseRate;
+  const scheduledBase = scheduledDays * CONFIG.legacyDayHours * hourlyBaseRate;
   // Late minutes affect attendance bonus eligibility only; they do not directly reduce base pay.
   const lateDeduction = 0;
-  const absenceDeduction = absentDays * 8 * hourlyBaseRate;
+  const absenceDeduction = (absenceHours + unpaidTimeOffHours) * hourlyBaseRate;
   const shortHoursDeduction = shortHours * hourlyBaseRate;
   const totalDeductions = absenceDeduction + shortHoursDeduction;
   const benefits = calculateBenefitsForPeriod_(code, employee, period, context, comp);
@@ -3670,6 +3812,9 @@ function calculateEmployeePay_(employeeCode, period, context) {
     : '';
   const notes = [];
   if (absentDays) notes.push(`${absentDays} absent day(s).`);
+  if (absenceHours) notes.push(`${round2_(absenceHours)} uncovered absent hour(s).`);
+  if (paidTimeOffHours) notes.push(`${round2_(paidTimeOffHours)} approved paid time-off hour(s).`);
+  if (unpaidTimeOffHours) notes.push(`${round2_(unpaidTimeOffHours)} approved unpaid time-off hour(s).`);
   if (incompleteDays) notes.push(`${incompleteDays} incomplete day(s); verify clock events before payment.`);
   if (pendingTimestampRevisions) notes.push(`${pendingTimestampRevisions} pending timestamp revision request(s); resolve before payment.`);
   if (makeupHoursApplied) notes.push(`${round2_(makeupHoursApplied)} approved makeup hour(s) offset short-hours deductions.`);
@@ -3959,6 +4104,7 @@ function applyAttendanceFormatting_(ss) {
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.log), 16, CONFIG.statuses);
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests), 3, CONFIG.timeOffTypes);
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests), 8, CONFIG.requestStatuses);
+  setValidation_(getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests), 14, ['Yes', 'No']);
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.makeupRequests), 6, CONFIG.requestStatuses);
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.timestampRevisions), 4, CONFIG.eventTypes);
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.timestampRevisions), 9, CONFIG.requestStatuses);
@@ -3973,6 +4119,7 @@ function applyAttendanceFormatting_(ss) {
   getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests).getRange('D:E').setNumberFormat('yyyy-mm-dd');
   getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests).getRange('F:F').setNumberFormat('0.00');
   getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests).getRange('J:J').setNumberFormat(CONFIG.sheetDateTimeFormat);
+  getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests).getRange('L:M').setNumberFormat('@');
   getSheet_(ss, CONFIG.attendanceTabs.ptoBalances).getRange('B:B').setNumberFormat('0');
   getSheet_(ss, CONFIG.attendanceTabs.ptoBalances).getRange('D:L').setNumberFormat('0.00');
   getSheet_(ss, CONFIG.attendanceTabs.makeupRequests).getRange('C:C').setNumberFormat('yyyy-mm-dd');
@@ -4008,6 +4155,7 @@ function applyAttendanceNumberFormatsForTab_(ss, tabName, changedRange) {
     applyNumberFormatColumns_(sheet, 4, 2, 'yyyy-mm-dd', changedRange);
     applyNumberFormatColumns_(sheet, 6, 1, '0.00', changedRange);
     applyNumberFormatColumns_(sheet, 10, 1, CONFIG.sheetDateTimeFormat, changedRange);
+    applyNumberFormatColumns_(sheet, 12, 2, '@', changedRange);
   }
   if (tabName === CONFIG.attendanceTabs.ptoBalances) {
     applyNumberFormatColumns_(sheet, 2, 1, '0', changedRange);
@@ -4209,7 +4357,7 @@ function seedPayPeriods_(ss, year) {
   repairPayPeriodIds_(ss);
 }
 
-function buildAttendanceLogRow_(date, employee, schedule, events, holidays, overrideStatus) {
+function buildAttendanceLogRow_(date, employee, schedule, events, holidays, overrideStatus, approvedTimeOff) {
   const code = normalizeCode_(employee['Employee Code']);
   const daySchedule = getDaySchedule_(schedule, date);
   const holiday = getPaidHoliday_(holidays, date, code);
@@ -4227,7 +4375,9 @@ function buildAttendanceLogRow_(date, employee, schedule, events, holidays, over
   if (daySchedule.isScheduled) {
     lateMinutes = 0;
     if (parts.clockIn && scheduledStart) {
-      lateMinutes += Math.max(0, Math.round((parts.clockIn.getTime() - scheduledStart.getTime()) / 60000));
+      const adjustedStart = getApprovedLeaveStartCoverageEnd_(approvedTimeOff, daySchedule.start);
+      const expectedStart = adjustedStart === '' ? scheduledStart : makeDateAtHour_(date, adjustedStart);
+      lateMinutes += Math.max(0, Math.round((parts.clockIn.getTime() - expectedStart.getTime()) / 60000));
     }
     if (parts.lunchEnd && scheduledLunchEnd) {
       lateMinutes += Math.max(0, Math.round((parts.lunchEnd.getTime() - scheduledLunchEnd.getTime()) / 60000));
@@ -4508,6 +4658,13 @@ function buildTimesheetReviewRows_(attendance, employee, startDate, endDate, opt
         && date.getTime() >= start.getTime()
         && date.getTime() <= end.getTime();
     });
+  const approvedTimeOffByKey = buildApprovedTimeOffHoursByDate_(
+    readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timeOffRequests)),
+    schedules,
+    code,
+    start,
+    end
+  );
   const logByDate = {};
   const eventsByDate = {};
   const revisionsByDate = {};
@@ -4536,7 +4693,7 @@ function buildTimesheetReviewRows_(attendance, employee, startDate, endDate, opt
     const schedule = getScheduleForDate_(schedules, code, cursor);
     const daySchedule = getDaySchedule_(schedule, cursor);
     const pending = rowRevisions.filter(row => row['Status (Pending/Approved/Denied)'] === 'Pending');
-    const issues = buildTimesheetIssueList_(logRow, daySchedule, pending);
+    const issues = buildTimesheetIssueList_(logRow, daySchedule, pending, approvedTimeOffByKey[`${key}|${code}`]);
     const eventOptions = rowEvents.map(event => ({
       eventId: String(event['Event ID'] || ''),
       eventType: event['Event Type'] || '',
@@ -4577,6 +4734,13 @@ function buildTimesheetLogRowsFromSources_(attendance, employee, startDate, endD
   events = events || getClockEvents_(attendance, startDate, endOfDay_(endDate), code);
   const holidays = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.holidays));
   const overrides = readAttendanceStatusOverrides_(attendance, startDate, endDate);
+  const approvedTimeOffByKey = buildApprovedTimeOffHoursByDate_(
+    readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timeOffRequests)),
+    schedules,
+    code,
+    startDate,
+    endDate
+  );
   const eventsByKey = groupEventsByDateEmployee_(events);
   const rows = [];
 
@@ -4584,7 +4748,7 @@ function buildTimesheetLogRowsFromSources_(attendance, employee, startDate, endD
     if (!employeeEmployedOnDate_(employee, cursor)) continue;
     const schedule = getScheduleForDate_(schedules, code, cursor);
     const key = `${formatDateKey_(cursor)}|${code}`;
-    const rowValues = buildAttendanceLogRow_(cursor, employee, schedule, eventsByKey[key] || [], holidays, overrides[key]);
+    const rowValues = buildAttendanceLogRow_(cursor, employee, schedule, eventsByKey[key] || [], holidays, overrides[key], approvedTimeOffByKey[key]);
     const rowObject = {};
     HEADERS.log.forEach((header, index) => {
       rowObject[header] = rowValues[index];
@@ -4604,7 +4768,7 @@ function buildScheduleLabelForTimesheet_(logRow, daySchedule, date) {
   return 'Not scheduled';
 }
 
-function buildTimesheetIssueList_(logRow, daySchedule, pendingRevisions) {
+function buildTimesheetIssueList_(logRow, daySchedule, pendingRevisions, approvedTimeOff) {
   const issues = [];
   const status = String(logRow.Status || '');
   const isScheduled = Boolean((logRow && logRow['Scheduled Start']) || (daySchedule && daySchedule.isScheduled));
@@ -4616,6 +4780,7 @@ function buildTimesheetIssueList_(logRow, daySchedule, pendingRevisions) {
   const scheduledLunch = daySchedule && daySchedule.lunchStart !== '' && daySchedule.lunchEnd !== '';
   const workedHours = toNumberOrBlank_(logRow['Worked Hours']);
   const lateMinutes = toNumberOrBlank_(logRow['Total Late Minutes']);
+  const approvedHours = approvedTimeOff ? Math.min(CONFIG.legacyDayHours, toNumberOrZero_(approvedTimeOff.total)) : 0;
 
   if (isScheduled && !nonWorkStatus && !clockIn) {
     issues.push({ code: 'missingClockIn', label: 'Missing clock-in', eventType: 'CLOCK_IN' });
@@ -4629,8 +4794,8 @@ function buildTimesheetIssueList_(logRow, daySchedule, pendingRevisions) {
   if (lateMinutes !== '' && lateMinutes > 0) {
     issues.push({ code: 'lateMinutes', label: `${round2_(lateMinutes)} late minute(s)`, eventType: clockIn ? 'LUNCH_END' : 'CLOCK_IN' });
   }
-  if (workedHours !== '' && workedHours < 8 && status === 'Present') {
-    issues.push({ code: 'shortHours', label: `${round2_(8 - workedHours)} short hour(s)`, eventType: 'CLOCK_OUT' });
+  if (workedHours !== '' && workedHours + approvedHours < CONFIG.legacyDayHours && status === 'Present') {
+    issues.push({ code: 'shortHours', label: `${round2_(CONFIG.legacyDayHours - workedHours - approvedHours)} short hour(s)`, eventType: 'CLOCK_OUT' });
   }
   if (status === 'Absent') {
     issues.push({ code: 'absent', label: 'Absent', eventType: 'CLOCK_IN' });
@@ -4808,6 +4973,7 @@ function readApprovedTimeOffOverrides_(ss, startDate, endDate) {
   const rows = readObjects_(getSheet_(ss, CONFIG.attendanceTabs.timeOffRequests));
   rows.forEach(row => {
     if (row['Status (Pending/Approved/Denied)'] !== 'Approved') return;
+    if (!isFullDayTimeOffRequest_(row)) return;
     const type = row['Type (PTO/UTO/Non-PTO)'];
     if (CONFIG.timeOffTypes.indexOf(type) === -1) return;
     const code = normalizeCode_(row['Employee Code']);
@@ -4823,6 +4989,76 @@ function readApprovedTimeOffOverrides_(ss, startDate, endDate) {
     }
   });
   return overrides;
+}
+
+function calculateTimeOffRequestFromPayload_(attendance, employeeCode, payload) {
+  payload = payload || {};
+  const code = normalizeCode_(employeeCode);
+  const startDate = parseDateOrBlank_(payload.startDate);
+  const endDate = parseDateOrBlank_(payload.endDate);
+  if (!code) throw new Error('Employee is required.');
+  if (!startDate || !endDate) throw new Error('Start Date and End Date are required.');
+  if (dateOnly_(startDate).getTime() > dateOnly_(endDate).getTime()) {
+    throw new Error('End Date must be on or after Start Date.');
+  }
+
+  const schedules = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules));
+  const fullDay = normalizeYesNo_(payload.fullDay || payload.fullDayRequest || payload.isFullDay) === 'Yes';
+  if (fullDay) {
+    let requestedHours = 0;
+    for (let cursor = dateOnly_(startDate); cursor.getTime() <= dateOnly_(endDate).getTime(); cursor = addDays_(cursor, 1)) {
+      const daySchedule = getDaySchedule_(getScheduleForDate_(schedules, code, cursor), cursor);
+      if (!daySchedule.isScheduled) {
+        throw new Error(`${formatDateKey_(cursor)} is not a scheduled workday. Full-day time off can only include scheduled days.`);
+      }
+      const dayHours = calculateFullDayTimeOffHours_(daySchedule);
+      if (dayHours <= 0) throw new Error(`${formatDateKey_(cursor)} has no payable scheduled hours.`);
+      requestedHours += dayHours;
+    }
+    return {
+      requestedHours: round2_(requestedHours),
+      startTime: '',
+      endTime: '',
+      fullDay: true,
+      note: `Full-day request uses scheduled shift length minus ${CONFIG.standardFullDayLunchHours} unpaid lunch hour.`
+    };
+  }
+
+  if (dateOnly_(startDate).getTime() !== dateOnly_(endDate).getTime()) {
+    throw new Error('Partial-day time off must be submitted one date at a time. Use Full Day for multi-day requests.');
+  }
+  const startTime = parseTimesheetTimeInput_(payload.startTime);
+  const endTime = parseTimesheetTimeInput_(payload.endTime);
+  if (startTime === '' || endTime === '') throw new Error('Enter Start Time and End Time as HH:MMam/pm.');
+  if (endTime <= startTime) throw new Error('End Time must be after Start Time.');
+  const daySchedule = getDaySchedule_(getScheduleForDate_(schedules, code, startDate), startDate);
+  if (!daySchedule.isScheduled) throw new Error(`${formatDateKey_(startDate)} is not a scheduled workday.`);
+  if (startTime < daySchedule.start || endTime > daySchedule.end) {
+    throw new Error(`Partial time off must stay inside the scheduled shift (${formatHour_(daySchedule.start)}-${formatHour_(daySchedule.end)}).`);
+  }
+  return {
+    requestedHours: round2_(endTime - startTime),
+    startTime: formatHour_(startTime),
+    endTime: formatHour_(endTime),
+    fullDay: false,
+    note: 'Partial-day request counts exact requested time; lunch is not subtracted automatically.'
+  };
+}
+
+function calculateFullDayTimeOffHours_(daySchedule) {
+  if (!daySchedule || !daySchedule.isScheduled) return 0;
+  return round2_(Math.max(0, daySchedule.end - daySchedule.start - CONFIG.standardFullDayLunchHours));
+}
+
+function normalizeYesNo_(value) {
+  const text = String(value || '').trim().toLowerCase();
+  if (text === 'yes' || text === 'y' || text === 'true' || text === '1' || text === 'on') return 'Yes';
+  return 'No';
+}
+
+function isFullDayTimeOffRequest_(row) {
+  return normalizeYesNo_(row['Full Day?']) === 'Yes'
+    || (!row['Start Time'] && !row['End Time'] && toNumberOrBlank_(row['Requested Hours']) !== '');
 }
 
 function createTimeOffRequest_(payload, source) {
@@ -4841,12 +5077,15 @@ function createTimeOffRequest_(payload, source) {
   if (dateOnly_(startDate).getTime() > dateOnly_(endDate).getTime()) {
     throw new Error('End Date must be on or after Start Date.');
   }
-  const hoursDays = toNumberOrBlank_(payload.hoursDays || payload.units || payload.days);
-  if (hoursDays === '' || hoursDays <= 0) throw new Error('Enter Hours/Days greater than zero.');
+  const calculation = calculateTimeOffRequestFromPayload_(attendance, employeeCode, payload);
+  if (calculation.requestedHours === '' || calculation.requestedHours <= 0) throw new Error('Requested Hours must be greater than zero.');
   const reason = String(payload.reason || '').trim();
   if (!reason) throw new Error('Reason is required.');
   const requestId = makeId_('TO');
-  const notes = `Submitted via ${source === 'WEB_APP' ? 'clock app' : 'sheet menu'} by ${getActiveUserEmail_() || employeeCode}.`;
+  const notes = [
+    `Submitted via ${source === 'WEB_APP' ? 'clock app' : 'sheet menu'} by ${getActiveUserEmail_() || employeeCode}.`,
+    calculation.note
+  ].filter(Boolean).join(' ');
 
   const requestRange = appendRows_(getSheet_(attendance, CONFIG.attendanceTabs.timeOffRequests), [[
     requestId,
@@ -4854,12 +5093,15 @@ function createTimeOffRequest_(payload, source) {
     type,
     dateOnly_(startDate),
     dateOnly_(endDate),
-    round2_(hoursDays),
+    round2_(calculation.requestedHours),
     reason,
     'Pending',
     '',
     '',
-    notes
+    notes,
+    calculation.startTime,
+    calculation.endTime,
+    calculation.fullDay ? 'Yes' : 'No'
   ]]);
   applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.timeOffRequests, requestRange);
   return { requestId, employeeCode, type };
@@ -4933,7 +5175,7 @@ function refreshPtoBalances_(attendance) {
     if (end) yearsByEmployee[code][end.getFullYear()] = true;
   });
 
-  const usage = summarizeApprovedTimeOffUsage_(requests);
+  const usage = summarizeApprovedTimeOffUsage_(requests, null, attendance);
   Object.keys(usage).forEach(key => {
     const parts = key.split('|');
     const code = parts[0];
@@ -4946,7 +5188,7 @@ function refreshPtoBalances_(attendance) {
   Object.keys(yearsByEmployee).sort().forEach(code => {
     Object.keys(yearsByEmployee[code]).sort().forEach(yearText => {
       const year = Number(yearText);
-      const balance = calculatePtoBalanceForEmployeeYear_(employeesByCode[code], compRows, requests, code, year);
+      const balance = calculatePtoBalanceForEmployeeYear_(employeesByCode[code], compRows, requests, code, year, null, attendance);
       rows.push([
         code,
         year,
@@ -5008,32 +5250,32 @@ function getPtoBalanceSummariesByEmployee_(attendance, year) {
     if (!code) return;
     summaries[code] = {
       ptoPlanType: row['PTO Plan Type'] || CONFIG.defaultPtoPlanType,
-      annualPto: toNumberOrBlank_(row['Annual PTO Allowance']),
-      monthlyPtoAccrualDays: toNumberOrBlank_(row['Monthly PTO Accrual Days']),
-      earnedPto: toNumberOrBlank_(row['Earned PTO']),
-      usedPto: toNumberOrBlank_(row['Used PTO']),
-      remainingPto: toNumberOrBlank_(row['Remaining PTO']),
-      payoutEligiblePto: toNumberOrBlank_(row['Payout Eligible PTO']),
-      annualNonPto: toNumberOrBlank_(row['Annual Non-PTO Allowance']),
-      usedNonPto: toNumberOrBlank_(row['Used Non-PTO']),
-      remainingNonPto: toNumberOrBlank_(row['Remaining Non-PTO'])
+      annualPto: toNumberOrBlank_(row['Annual PTO Hours']),
+      monthlyPtoAccrualDays: toNumberOrBlank_(row['Monthly PTO Accrual Hours']),
+      earnedPto: toNumberOrBlank_(row['Earned PTO Hours']),
+      usedPto: toNumberOrBlank_(row['Used PTO Hours']),
+      remainingPto: toNumberOrBlank_(row['Remaining PTO Hours']),
+      payoutEligiblePto: toNumberOrBlank_(row['Payout Eligible PTO Hours']),
+      annualNonPto: toNumberOrBlank_(row['Annual Non-PTO Hours']),
+      usedNonPto: toNumberOrBlank_(row['Used Non-PTO Hours']),
+      remainingNonPto: toNumberOrBlank_(row['Remaining Non-PTO Hours'])
     };
   });
   return summaries;
 }
 
-function calculatePtoBalanceForEmployeeYear_(employee, compRows, requests, employeeCode, year, asOfOverride) {
+function calculatePtoBalanceForEmployeeYear_(employee, compRows, requests, employeeCode, year, asOfOverride, attendance) {
   const code = normalizeCode_(employeeCode);
   const yearEnd = new Date(year, 11, 31);
   const asOfDate = asOfOverride ? dateOnly_(asOfOverride) : getPtoBalanceAsOfDate_(employee, year);
   const compDate = minDate_(asOfDate, yearEnd);
   const comp = getCompForDate_(compRows, code, compDate) || getCompForYear_(compRows, code, year);
   const planType = normalizePtoPlanType_(comp ? comp['PTO Plan Type'] : '');
-  const used = summarizeApprovedTimeOffUsage_(requests, asOfDate)[`${code}|${year}`] || { pto: 0, nonPto: 0 };
-  const annualPto = comp ? toNumberOrBlank_(comp['Annual PTO Days']) : '';
-  const annualNonPto = comp ? toNumberOrBlank_(comp['Annual Non-PTO Days']) : '';
+  const used = summarizeApprovedTimeOffUsage_(requests, asOfDate, attendance)[`${code}|${year}`] || { pto: 0, nonPto: 0 };
+  const annualPto = comp ? toNumberOrBlank_(comp['Annual PTO Hours']) : '';
+  const annualNonPto = comp ? toNumberOrBlank_(comp['Annual Non-PTO Hours']) : '';
   const monthlyAccrual = planType === 'Accrued Monthly'
-    ? (comp ? toNumberOrBlank_(comp['Monthly PTO Accrual Days']) : '')
+    ? (comp ? toNumberOrBlank_(comp['Monthly PTO Accrual Hours']) : '')
     : '';
   const earnedPto = planType === 'Accrued Monthly'
     ? calculateAccruedMonthlyPto_(employee, compRows, code, year, asOfDate)
@@ -5081,7 +5323,7 @@ function calculateAccruedMonthlyPto_(employee, compRows, employeeCode, year, asO
     if (!employeeEmployedForFullCalendarMonth_(employee, monthStart, monthEnd)) continue;
     const comp = getCompForDate_(compRows, code, monthEnd) || getCompForYear_(compRows, code, year);
     if (!comp || normalizePtoPlanType_(comp['PTO Plan Type']) !== 'Accrued Monthly') continue;
-    const monthlyRate = toNumberOrBlank_(comp['Monthly PTO Accrual Days']);
+    const monthlyRate = toNumberOrBlank_(comp['Monthly PTO Accrual Hours']);
     if (monthlyRate === '') {
       missingRate = true;
       continue;
@@ -5099,9 +5341,104 @@ function employeeEmployedForFullCalendarMonth_(employee, monthStart, monthEnd) {
     && (!end || dateOnly_(end).getTime() >= dateOnly_(monthEnd).getTime());
 }
 
-function summarizeApprovedTimeOffUsage_(requests, cutoffDate) {
+function buildApprovedTimeOffHoursByDate_(requests, schedules, employeeCode, startDate, endDate) {
+  const map = {};
+  const codeFilter = employeeCode ? normalizeCode_(employeeCode) : '';
+  const windowStart = dateOnly_(startDate);
+  const windowEnd = dateOnly_(endDate);
+  (requests || []).forEach(row => {
+    if (row['Status (Pending/Approved/Denied)'] !== 'Approved') return;
+    const type = row['Type (PTO/UTO/Non-PTO)'];
+    if (CONFIG.timeOffTypes.indexOf(type) === -1) return;
+    const code = normalizeCode_(row['Employee Code']);
+    if (!code || (codeFilter && code !== codeFilter)) return;
+    getTimeOffRequestDailySegments_(row, schedules || [], code, windowStart, windowEnd).forEach(segment => {
+      const key = `${formatDateKey_(segment.date)}|${code}`;
+      if (!map[key]) map[key] = { pto: 0, uto: 0, nonPto: 0, unpaid: 0, total: 0, segments: [] };
+      const hours = toNumberOrZero_(segment.hours);
+      if (type === 'PTO') map[key].pto += hours;
+      if (type === 'UTO') map[key].uto += hours;
+      if (type === 'Non-PTO') map[key].nonPto += hours;
+      if (type === 'UTO' || type === 'Non-PTO') map[key].unpaid += hours;
+      map[key].total += hours;
+      map[key].segments.push(Object.assign({}, segment, { type }));
+    });
+  });
+  return map;
+}
+
+function getTimeOffRequestDailySegments_(row, schedules, employeeCode, startDate, endDate) {
+  const requestStart = parseDateOrBlank_(row['Start Date']);
+  const requestEnd = parseDateOrBlank_(row['End Date']);
+  if (!requestStart || !requestEnd) return [];
+  const start = maxDate_(dateOnly_(requestStart), dateOnly_(startDate));
+  const end = minDate_(dateOnly_(requestEnd), dateOnly_(endDate));
+  if (start.getTime() > end.getTime()) return [];
+
+  if (isFullDayTimeOffRequest_(row)) {
+    const segments = [];
+    const requestedHours = toNumberOrBlank_(row['Requested Hours']);
+    const requestDayCount = countInclusiveDays_(requestStart, requestEnd) || 1;
+    for (let cursor = start; cursor.getTime() <= end.getTime(); cursor = addDays_(cursor, 1)) {
+      const daySchedule = getDaySchedule_(getScheduleForDate_(schedules, employeeCode, cursor), cursor);
+      let hours = daySchedule.isScheduled ? calculateFullDayTimeOffHours_(daySchedule) : 0;
+      if (!hours && requestedHours !== '') hours = requestedHours / requestDayCount;
+      if (!hours) continue;
+      segments.push({
+        date: dateOnly_(cursor),
+        hours: round2_(hours),
+        start: daySchedule.isScheduled ? daySchedule.start : '',
+        end: daySchedule.isScheduled ? daySchedule.end : '',
+        fullDay: true
+      });
+    }
+    return segments;
+  }
+
+  if (dateOnly_(requestStart).getTime() !== dateOnly_(requestEnd).getTime()) return [];
+  const requestDate = dateOnly_(requestStart);
+  if (requestDate.getTime() < start.getTime() || requestDate.getTime() > end.getTime()) return [];
+  const startTime = parseTimesheetTimeInput_(row['Start Time']);
+  const endTime = parseTimesheetTimeInput_(row['End Time']);
+  const requestedHours = toNumberOrBlank_(row['Requested Hours']);
+  if (startTime === '' || endTime === '' || endTime <= startTime) {
+    return requestedHours === '' ? [] : [{
+      date: requestDate,
+      hours: round2_(requestedHours),
+      start: '',
+      end: '',
+      fullDay: false
+    }];
+  }
+  return [{
+    date: requestDate,
+    hours: round2_(endTime - startTime),
+    start: startTime,
+    end: endTime,
+    fullDay: false
+  }];
+}
+
+function getApprovedLeaveStartCoverageEnd_(approvedTimeOff, scheduledStart) {
+  if (!approvedTimeOff || scheduledStart === '') return '';
+  let coverageEnd = scheduledStart;
+  const segments = (approvedTimeOff.segments || [])
+    .filter(segment => segment.start !== '' && segment.end !== '')
+    .sort((a, b) => a.start - b.start);
+  segments.forEach(segment => {
+    if (segment.start <= coverageEnd && segment.end > coverageEnd) {
+      coverageEnd = segment.end;
+    }
+  });
+  return coverageEnd > scheduledStart ? coverageEnd : '';
+}
+
+function summarizeApprovedTimeOffUsage_(requests, cutoffDate, attendance) {
   const usage = {};
   const cutoff = cutoffDate ? dateOnly_(cutoffDate) : null;
+  const schedules = attendance && hasSheet_(attendance, CONFIG.attendanceTabs.schedules)
+    ? readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.schedules))
+    : [];
   requests.forEach(row => {
     if (row['Status (Pending/Approved/Denied)'] !== 'Approved') return;
     const type = row['Type (PTO/UTO/Non-PTO)'];
@@ -5109,23 +5446,17 @@ function summarizeApprovedTimeOffUsage_(requests, cutoffDate) {
     const code = normalizeCode_(row['Employee Code']);
     const start = parseDateOrBlank_(row['Start Date']);
     const end = parseDateOrBlank_(row['End Date']);
-    const units = toNumberOrBlank_(row['Hours/Days']);
-    if (!code || !start || !end || units === '') return;
-    const totalDays = countInclusiveDays_(start, end);
-    if (!totalDays) return;
+    if (!code || !start || !end) return;
     const effectiveEnd = cutoff ? minDate_(dateOnly_(end), cutoff) : dateOnly_(end);
     if (effectiveEnd.getTime() < dateOnly_(start).getTime()) return;
-
-    for (let year = start.getFullYear(); year <= effectiveEnd.getFullYear(); year += 1) {
-      const segmentStart = maxDate_(dateOnly_(start), new Date(year, 0, 1));
-      const segmentEnd = minDate_(effectiveEnd, new Date(year, 11, 31));
-      if (segmentStart.getTime() > segmentEnd.getTime()) continue;
-      const segmentUnits = units * (countInclusiveDays_(segmentStart, segmentEnd) / totalDays);
+    const segments = getTimeOffRequestDailySegments_(row, schedules, code, dateOnly_(start), effectiveEnd);
+    segments.forEach(segment => {
+      const year = segment.date.getFullYear();
       const key = `${code}|${year}`;
       if (!usage[key]) usage[key] = { pto: 0, nonPto: 0 };
-      if (type === 'PTO') usage[key].pto += segmentUnits;
-      if (type === 'Non-PTO') usage[key].nonPto += segmentUnits;
-    }
+      if (type === 'PTO') usage[key].pto += toNumberOrZero_(segment.hours);
+      if (type === 'Non-PTO') usage[key].nonPto += toNumberOrZero_(segment.hours);
+    });
   });
   return usage;
 }
@@ -5135,6 +5466,7 @@ function getPayrollCompRows_() {
   if (!hasSheet_(payroll, CONFIG.payrollTabs.comp)) {
     throw new Error('Payroll Compensation Master is missing. Run setupPhase1() from the Payroll spreadsheet.');
   }
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
   return readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp));
 }
 
@@ -5187,10 +5519,10 @@ function getCompFieldConfig_() {
     { key: 'monthlyAttendanceBonus', header: 'Monthly Attendance Bonus', label: 'Monthly Attendance Bonus', type: 'number' },
     { key: 'monthlyKpiBonusMax', header: 'Monthly KPI Bonus (Max)', label: 'Monthly KPI Bonus Max', type: 'number' },
     { key: 'quarterlyPaBonus', header: 'Quarterly PA Bonus', label: 'Quarterly PA Bonus', type: 'number' },
-    { key: 'annualPtoDays', header: 'Annual PTO Days', label: 'Annual PTO Days', type: 'number' },
-    { key: 'annualNonPtoDays', header: 'Annual Non-PTO Days', label: 'Annual Non-PTO Days', type: 'number' },
+    { key: 'annualPtoDays', header: 'Annual PTO Hours', label: 'Annual PTO Hours', type: 'number' },
+    { key: 'annualNonPtoDays', header: 'Annual Non-PTO Hours', label: 'Annual Non-PTO Hours', type: 'number' },
     { key: 'ptoPlanType', header: 'PTO Plan Type', label: 'PTO Plan Type', type: 'select', options: CONFIG.ptoPlanTypes },
-    { key: 'monthlyPtoAccrualDays', header: 'Monthly PTO Accrual Days', label: 'Monthly PTO Accrual Days', type: 'number' }
+    { key: 'monthlyPtoAccrualDays', header: 'Monthly PTO Accrual Hours', label: 'Monthly PTO Accrual Hours', type: 'number' }
   ];
 }
 
@@ -5379,13 +5711,15 @@ function calculatePtoPayoutForOffboarding_(attendance, payroll, employeeCode, ye
   const employee = getEmployeeRowByCodeAnyStatus_(attendance, code);
   const compRows = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.comp));
   const requests = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timeOffRequests));
-  const balance = calculatePtoBalanceForEmployeeYear_(employee, compRows, requests, code, year, lastDay);
+  const balance = calculatePtoBalanceForEmployeeYear_(employee, compRows, requests, code, year, lastDay, attendance);
   if (balance.ptoPlanType !== 'Accrued Monthly') {
     const yearEnd = new Date(year, 11, 31);
     return {
       amount: 0,
       eligibleDays: 0,
+      eligibleHours: 0,
       dailyBaseRate: '',
+      hourlyBaseRate: '',
       ptoPlanType: balance.ptoPlanType,
       note: lastDay.getTime() < yearEnd.getTime()
         ? 'PTO payout: $0.00. Fixed Annual PTO is not eligible for unused PTO cash payout before year-end.'
@@ -5398,9 +5732,11 @@ function calculatePtoPayoutForOffboarding_(attendance, payroll, employeeCode, ye
     return {
       amount: 0,
       eligibleDays: eligiblePto === '' ? '' : 0,
+      eligibleHours: eligiblePto === '' ? '' : 0,
       dailyBaseRate: '',
+      hourlyBaseRate: '',
       ptoPlanType: balance.ptoPlanType,
-      note: 'PTO payout: no remaining accrued PTO days are currently eligible for payout.'
+      note: 'PTO payout: no remaining accrued PTO hours are currently eligible for payout.'
     };
   }
 
@@ -5410,7 +5746,9 @@ function calculatePtoPayoutForOffboarding_(attendance, payroll, employeeCode, ye
     return {
       amount: '',
       eligibleDays: eligiblePto,
+      eligibleHours: eligiblePto,
       dailyBaseRate: '',
+      hourlyBaseRate: '',
       ptoPlanType: balance.ptoPlanType,
       note: 'PTO payout cannot be calculated because Monthly Base Salary is blank. Benefits are excluded from this calculation.'
     };
@@ -5422,20 +5760,25 @@ function calculatePtoPayoutForOffboarding_(attendance, payroll, employeeCode, ye
     return {
       amount: '',
       eligibleDays: eligiblePto,
+      eligibleHours: eligiblePto,
       dailyBaseRate: '',
+      hourlyBaseRate: '',
       ptoPlanType: balance.ptoPlanType,
       note: 'PTO payout cannot be calculated because no scheduled days were found for the rate reference month.'
     };
   }
 
   const dailyBaseRate = monthlyBase / scheduledDaysInMonth;
-  const amount = round2_(eligiblePto * dailyBaseRate * 1.5);
+  const hourlyBaseRate = dailyBaseRate / CONFIG.legacyDayHours;
+  const amount = round2_(eligiblePto * hourlyBaseRate * 1.5);
   return {
     amount,
     eligibleDays: round2_(eligiblePto),
+    eligibleHours: round2_(eligiblePto),
     dailyBaseRate: round2_(dailyBaseRate),
+    hourlyBaseRate: round2_(hourlyBaseRate),
     ptoPlanType: balance.ptoPlanType,
-    note: `Accrued Monthly PTO payout included in final payroll: ${round2_(eligiblePto)} remaining accrued PTO day(s) x ${round2_(dailyBaseRate)} daily base rate x 1.5. Benefits excluded.`
+    note: `Accrued Monthly PTO payout included in final payroll: ${round2_(eligiblePto)} remaining accrued PTO hour(s) x ${round2_(hourlyBaseRate)} hourly base rate x 1.5. Benefits excluded.`
   };
 }
 
@@ -5494,7 +5837,7 @@ function upsertFinalPtoPayoutAdjustment_(attendance, payroll, employeeCode, fina
     finalPeriod.periodId,
     normalizeCode_(employeeCode),
     'Positive Adj',
-    `Accrued PTO payout: ${round2_(payout.eligibleDays)} day(s) x ${round2_(payout.dailyBaseRate)} daily base rate x 1.5. Benefits excluded.`,
+    `Accrued PTO payout: ${round2_(payout.eligibleHours)} hour(s) x ${round2_(payout.hourlyBaseRate)} hourly base rate x 1.5. Benefits excluded.`,
     round2_(payout.amount),
     getActiveUserEmail_(),
     new Date()

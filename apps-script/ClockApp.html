@@ -188,6 +188,22 @@
         color: var(--ink-primary);
         transition: border-color 120ms ease;
       }
+      input[type="checkbox"] {
+        width: 16px;
+        min-height: auto;
+        height: 16px;
+        margin: 0 8px 0 0;
+        accent-color: var(--accent);
+        vertical-align: middle;
+      }
+      input:disabled {
+        color: var(--ink-muted);
+      }
+      .checkbox-line {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
       select {
         appearance: none;
         -webkit-appearance: none;
@@ -229,6 +245,9 @@
         border-bottom: 1px solid var(--rule);
         margin: 18px 0 0;
       }
+      .metric-strip.two {
+        grid-template-columns: repeat(2, 1fr);
+      }
       .metric {
         padding: 14px 12px;
         border-right: 1px solid var(--rule);
@@ -261,6 +280,11 @@
         border-right: 1px solid var(--ink-primary);
         background: transparent;
         color: var(--ink-primary);
+      }
+      .segmented button:hover:not(:disabled) {
+        background: var(--accent);
+        color: var(--bg-foundation);
+        border-color: var(--accent);
       }
       .segmented button:last-child { border-right: 0; }
       .segmented button.active {
@@ -598,8 +622,15 @@
           <input id="startDate" type="date" value="${escapeAttr(today)}">
           <label for="endDate">End Date</label>
           <input id="endDate" type="date" value="${escapeAttr(today)}">
-          <label for="hoursDays">Hours / Days</label>
-          <input id="hoursDays" type="number" min="0.25" step="0.25" inputmode="decimal">
+          <label class="checkbox-line"><input id="fullDay" type="checkbox" checked onchange="toggleTimeOffTimeFields(); scheduleTimeOffPreview()"> Full Day</label>
+          <label for="startTime">Start Time</label>
+          <input id="startTime" placeholder="10:00am" oninput="scheduleTimeOffPreview()">
+          <label for="endTime">End Time</label>
+          <input id="endTime" placeholder="02:00pm" oninput="scheduleTimeOffPreview()">
+          <div class="metric-strip two">
+            <div class="metric"><div class="label">Requested Hours</div><div id="requestedHoursPreview" class="value">Blank</div></div>
+            <div class="metric"><div class="label">Calculation</div><div id="calculationNote" class="value">Blank</div></div>
+          </div>
           <label for="reason">Reason</label>
           <textarea id="reason"></textarea>
           <div class="form-actions">
@@ -608,6 +639,12 @@
           </div>
           <p id="status" class="status"></p>
         `;
+        ['requestType', 'startDate', 'endDate'].forEach(id => {
+          const node = document.getElementById(id);
+          if (node) node.addEventListener('change', scheduleTimeOffPreview);
+        });
+        toggleTimeOffTimeFields();
+        scheduleTimeOffPreview();
       }
 
       function showMakeupForm() {
@@ -796,10 +833,12 @@
           type: value('requestType'),
           startDate: value('startDate'),
           endDate: value('endDate'),
-          hoursDays: value('hoursDays'),
+          startTime: value('startTime'),
+          endTime: value('endTime'),
+          fullDay: document.getElementById('fullDay').checked ? 'Yes' : 'No',
           reason: value('reason')
         };
-        if (!payload.startDate || !payload.endDate || !payload.hoursDays || !payload.reason) {
+        if (!payload.startDate || !payload.endDate || !payload.reason || (payload.fullDay !== 'Yes' && (!payload.startTime || !payload.endTime))) {
           setStatus('Complete every field before submitting.', true);
           return;
         }
@@ -815,6 +854,51 @@
             setRequestBusy(false);
           })
           .submitWebTimeOffRequest(payload);
+      }
+
+      function toggleTimeOffTimeFields() {
+        const fullDay = document.getElementById('fullDay');
+        const start = document.getElementById('startTime');
+        const end = document.getElementById('endTime');
+        if (!fullDay || !start || !end) return;
+        start.disabled = fullDay.checked;
+        end.disabled = fullDay.checked;
+      }
+
+      let timeOffPreviewTimer = null;
+      function scheduleTimeOffPreview() {
+        clearTimeout(timeOffPreviewTimer);
+        timeOffPreviewTimer = setTimeout(updateTimeOffPreview, 250);
+      }
+
+      function updateTimeOffPreview() {
+        const fullDay = document.getElementById('fullDay');
+        const hoursNode = document.getElementById('requestedHoursPreview');
+        const noteNode = document.getElementById('calculationNote');
+        if (!fullDay || !hoursNode || !noteNode || !value('startDate') || !value('endDate')) return;
+        if (!fullDay.checked && (!value('startTime') || !value('endTime'))) {
+          hoursNode.textContent = 'Blank';
+          noteNode.textContent = 'Enter start and end time.';
+          return;
+        }
+        google.script.run
+          .withSuccessHandler(result => {
+            hoursNode.textContent = formatBalance(result.requestedHours);
+            noteNode.textContent = result.note || 'Ready.';
+          })
+          .withFailureHandler(error => {
+            hoursNode.textContent = 'Blank';
+            noteNode.textContent = error && error.message ? error.message : String(error);
+          })
+          .previewWebTimeOffRequest({
+            identity: getIdentity(),
+            type: value('requestType'),
+            startDate: value('startDate'),
+            endDate: value('endDate'),
+            startTime: value('startTime'),
+            endTime: value('endTime'),
+            fullDay: fullDay.checked ? 'Yes' : 'No'
+          });
       }
 
       function submitMakeupRequest() {
@@ -879,7 +963,7 @@
         const earned = formatBalance(balance.earnedPto);
         const pto = formatBalance(balance.remainingPto);
         const nonPto = formatBalance(balance.remainingNonPto);
-        return `<p class="balance-line">Current year balance: ${escapeHtml(plan)} PTO earned ${escapeHtml(earned)}, remaining ${escapeHtml(pto)} | Non-PTO ${escapeHtml(nonPto)}</p>`;
+        return `<p class="balance-line">Current year balance: ${escapeHtml(plan)} PTO earned ${escapeHtml(earned)}h, remaining ${escapeHtml(pto)}h | Non-PTO ${escapeHtml(nonPto)}h</p>`;
       }
 
       function renderTimesheetSummaryLine(summary) {

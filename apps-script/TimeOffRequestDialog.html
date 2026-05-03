@@ -93,6 +93,17 @@
         min-height: 104px;
         resize: vertical;
       }
+      input[type="checkbox"] {
+        width: 16px;
+        min-height: auto;
+        height: 16px;
+        margin: 0 8px 0 0;
+        accent-color: var(--accent);
+        vertical-align: middle;
+      }
+      input:disabled {
+        color: var(--ink-muted);
+      }
       .balance {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -173,34 +184,53 @@
               <div id="ptoPlanType" class="metric-value">Blank</div>
             </div>
             <div class="metric">
-              <div class="metric-label">PTO Earned</div>
+              <div class="metric-label">PTO Earned Hours</div>
               <div id="ptoEarned" class="metric-value">Blank</div>
             </div>
             <div class="metric">
-              <div class="metric-label">PTO Remaining</div>
+              <div class="metric-label">PTO Remaining Hours</div>
               <div id="ptoRemaining" class="metric-value">Blank</div>
             </div>
             <div class="metric">
-              <div class="metric-label">Non-PTO Remaining</div>
+              <div class="metric-label">Non-PTO Remaining Hours</div>
               <div id="nonPtoRemaining" class="metric-value">Blank</div>
             </div>
           </div>
         </div>
         <div>
           <label for="type">Type</label>
-          <select id="type" required></select>
+          <select id="type" onchange="schedulePreview()" required></select>
         </div>
         <div>
-          <label for="hoursDays">Hours / Days</label>
-          <input id="hoursDays" type="number" min="0.25" step="0.25" required>
+          <label><input id="fullDay" type="checkbox" onchange="toggleTimeFields(); schedulePreview()" checked> Full Day</label>
         </div>
         <div>
           <label for="startDate">Start Date</label>
-          <input id="startDate" type="date" required>
+          <input id="startDate" type="date" onchange="schedulePreview()" required>
         </div>
         <div>
           <label for="endDate">End Date</label>
-          <input id="endDate" type="date" required>
+          <input id="endDate" type="date" onchange="schedulePreview()" required>
+        </div>
+        <div>
+          <label for="startTime">Start Time</label>
+          <input id="startTime" placeholder="10:00am" oninput="schedulePreview()">
+        </div>
+        <div>
+          <label for="endTime">End Time</label>
+          <input id="endTime" placeholder="02:00pm" oninput="schedulePreview()">
+        </div>
+        <div class="full">
+          <div class="balance">
+            <div class="metric">
+              <div class="metric-label">Requested Hours</div>
+              <div id="requestedHoursPreview" class="metric-value">Blank</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Calculation</div>
+              <div id="calculationNote" class="metric-value">Blank</div>
+            </div>
+          </div>
         </div>
         <div class="full">
           <label for="reason">Reason</label>
@@ -232,6 +262,8 @@
             document.getElementById('startDate').value = data.today || '';
             document.getElementById('endDate').value = data.today || '';
             renderBalance();
+            toggleTimeFields();
+            schedulePreview();
             setStatus('Ready.');
           })
           .withFailureHandler(showError)
@@ -244,6 +276,46 @@
         document.getElementById('ptoEarned').textContent = formatBalance(balance.earnedPto);
         document.getElementById('ptoRemaining').textContent = formatBalance(balance.remainingPto);
         document.getElementById('nonPtoRemaining').textContent = formatBalance(balance.remainingNonPto);
+        schedulePreview();
+      }
+
+      function toggleTimeFields() {
+        const fullDay = document.getElementById('fullDay').checked;
+        document.getElementById('startTime').disabled = fullDay;
+        document.getElementById('endTime').disabled = fullDay;
+      }
+
+      let previewTimer = null;
+      function schedulePreview() {
+        clearTimeout(previewTimer);
+        previewTimer = setTimeout(updatePreview, 250);
+      }
+
+      function updatePreview() {
+        if (!value('employeeCode') || !value('startDate') || !value('endDate')) return;
+        if (!document.getElementById('fullDay').checked && (!value('startTime') || !value('endTime'))) {
+          document.getElementById('requestedHoursPreview').textContent = 'Blank';
+          document.getElementById('calculationNote').textContent = 'Enter start and end time.';
+          return;
+        }
+        google.script.run
+          .withSuccessHandler(result => {
+            document.getElementById('requestedHoursPreview').textContent = formatBalance(result.requestedHours);
+            document.getElementById('calculationNote').textContent = result.note || 'Ready.';
+          })
+          .withFailureHandler(error => {
+            document.getElementById('requestedHoursPreview').textContent = 'Blank';
+            document.getElementById('calculationNote').textContent = error && error.message ? error.message : String(error);
+          })
+          .previewTimeOffRequest({
+            employeeCode: value('employeeCode'),
+            type: value('type'),
+            startDate: value('startDate'),
+            endDate: value('endDate'),
+            startTime: value('startTime'),
+            endTime: value('endTime'),
+            fullDay: document.getElementById('fullDay').checked ? 'Yes' : 'No'
+          });
       }
 
       function submitForm(event) {
@@ -264,7 +336,9 @@
             type: value('type'),
             startDate: value('startDate'),
             endDate: value('endDate'),
-            hoursDays: value('hoursDays'),
+            startTime: value('startTime'),
+            endTime: value('endTime'),
+            fullDay: document.getElementById('fullDay').checked ? 'Yes' : 'No',
             reason: value('reason')
           });
       }

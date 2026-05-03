@@ -227,7 +227,7 @@
               ${rows.map(row => `
                 <tr data-kind="timeOff" data-id="${escapeAttr(row.requestId)}">
                   <td>${escapeHtml(row.employee)}<span class="code">${escapeHtml(row.employeeCode)}</span></td>
-                  <td>${escapeHtml(row.type)}<span class="code">${escapeHtml(row.startDate)} to ${escapeHtml(row.endDate)} | ${escapeHtml(row.units)} unit(s)</span></td>
+                  <td>${escapeHtml(row.type)}<span class="code">${escapeHtml(formatTimeOffWindow(row))} | ${escapeHtml(row.units)} hour(s)</span></td>
                   <td class="reason">${escapeHtml(row.reason)}</td>
                   <td class="balance">${formatBalance(row.balance)}</td>
                   <td>${decisionSelect()}</td>
@@ -266,6 +266,11 @@
             </tbody>
           </table>
         `;
+      }
+
+      function formatTimeOffWindow(row) {
+        if (row.fullDay === 'Yes') return `${row.startDate} to ${row.endDate} | Full day`;
+        return `${row.startDate} ${row.startTime || ''} to ${row.endDate} ${row.endTime || ''}`.trim();
       }
 
       function decisionSelect() {
@@ -307,7 +312,7 @@
 
       function formatBalance(balance) {
         if (!balance) return 'Balance blank';
-        return `${balance.ptoPlanType || 'PTO'} | earned ${formatNumber(balance.earnedPto)} | remaining ${formatNumber(balance.remainingPto)} | Non-PTO ${formatNumber(balance.remainingNonPto)}`;
+        return `${balance.ptoPlanType || 'PTO'} | earned ${formatNumber(balance.earnedPto)}h | remaining ${formatNumber(balance.remainingPto)}h | Non-PTO ${formatNumber(balance.remainingNonPto)}h`;
       }
 
       function formatNumber(value) {
