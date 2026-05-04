@@ -3,6 +3,8 @@ const CONFIG = {
   payrollSpreadsheetName: 'Payroll System - Payroll',
   attendanceSpreadsheetIdProp: 'ATTENDANCE_SPREADSHEET_ID',
   payrollSpreadsheetIdProp: 'PAYROLL_SPREADSHEET_ID',
+  portalAdminAccessKeyHashProp: 'PORTAL_ADMIN_ACCESS_KEY_HASH',
+  portalAdminAccessKeySaltProp: 'PORTAL_ADMIN_ACCESS_KEY_SALT',
   timezone: 'America/Los_Angeles',
   eventTypes: ['CLOCK_IN', 'LUNCH_START', 'LUNCH_END', 'BREAK_START', 'BREAK_END', 'CLOCK_OUT'],
   eventLabels: {
@@ -27,6 +29,8 @@ const CONFIG = {
   ptoPlanTypes: ['Fixed Annual', 'Accrued Monthly'],
   defaultPtoPlanType: 'Fixed Annual',
   departments: ['Operations', 'HR', 'Marketing', 'Advertising'],
+  portalRoles: ['Employee', 'Attendance Admin', 'Payroll Admin'],
+  defaultPortalRole: 'Employee',
   sheetTimeFormat: 'hh:mmam/pm',
   sheetDateTimeFormat: 'yyyy-mm-dd hh:mmam/pm',
   legacyDayHours: 8,
@@ -57,6 +61,8 @@ const CONFIG = {
   workflowInstructionsTab: '0. Workflow Instructions',
   monthlyAttendanceBonusLateMinuteLimit: 90
 };
+
+let PORTAL_AUTH_IDENTITY_CONTEXT_ = null;
 
 const UI_THEME = {
   foundation: '#F7F1EB',
@@ -103,7 +109,8 @@ const HEADERS = {
     'Email',
     'Web App PIN',
     'Notes',
-    'Department'
+    'Department',
+    'Portal Role'
   ],
   schedules: [
     'Employee Code',
@@ -519,6 +526,7 @@ function addAttendanceMenu_() {
   SpreadsheetApp.getUi()
     .createMenu('Attendance')
     .addItem('Open Clock-In Web App URL', 'showClockAppUrl')
+    .addItem('Set Portal Admin Access Key...', 'setPortalAdminAccessKeyFromMenu')
     .addItem('Create Workflow Instructions Tabs', 'createWorkflowInstructionsTabsFromMenu')
     .addItem('Inject Phase 1 Test Data', 'injectPhase1TestDataFromMenu')
     .addSeparator()
@@ -542,6 +550,8 @@ function addAttendanceMenu_() {
 function addPayrollMenu_() {
   SpreadsheetApp.getUi()
     .createMenu('Payroll')
+    .addItem('Set Portal Admin Access Key...', 'setPortalAdminAccessKeyFromMenu')
+    .addSeparator()
     .addItem('Create Workflow Instructions Tabs', 'createWorkflowInstructionsTabsFromMenu')
     .addItem('Inject Phase 1 Test Data', 'injectPhase1TestDataFromMenu')
     .addSeparator()
@@ -573,6 +583,30 @@ function showClockAppUrl() {
     ? `Clock-In Web App URL:\n\n${url}\n\nDeploy as "Execute as: Me" and "Anyone with Google account" before sharing.`
     : 'No web app deployment URL is available yet. Deploy this script as a web app first.';
   SpreadsheetApp.getUi().alert('Clock-In Web App', message, SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+function setPortalAdminAccessKeyFromMenu() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.prompt(
+    'Set Portal Admin Access Key',
+    'Enter the admin access key payroll/admin users will use with their email on the web dashboard. This does not replace Portal Role checks.',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+  const result = setPortalAdminAccessKey(response.getResponseText());
+  ui.alert('Portal Admin Access Key', result.message, ui.ButtonSet.OK);
+}
+
+function setPortalAdminAccessKey(accessKey) {
+  const key = String(accessKey || '').trim();
+  if (key.length < 8) throw new Error('Admin access key must be at least 8 characters.');
+  const salt = Utilities.getUuid();
+  const props = PropertiesService.getScriptProperties();
+  props.setProperties({
+    [CONFIG.portalAdminAccessKeySaltProp]: salt,
+    [CONFIG.portalAdminAccessKeyHashProp]: hashPortalAdminAccessKey_(key, salt)
+  });
+  return { message: 'Portal admin access key saved. Admin users can now log in with email + access key.' };
 }
 
 function showAboutHelp() {
@@ -726,16 +760,52 @@ function markSelectedPayPeriodPaidFromMenu() {
 }
 
 function exportPayrollOutputCsv() {
+  requirePortalRole_('Payroll Admin');
+  const result = exportPayrollOutputCsvForPortal();
+  SpreadsheetApp.getUi().alert('Export Complete', `CSV file created:\n${result.fileUrl}`, SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+function exportPayrollOutputCsvForPortal() {
   const ss = requirePayrollSpreadsheet_();
   const sheet = getSheet_(ss, CONFIG.payrollTabs.output);
   const values = sheet.getDataRange().getDisplayValues();
   const csv = values.map(row => row.map(csvEscape_).join(',')).join('\n');
   const file = DriveApp.createFile(`Payroll Output ${formatDateKey_(new Date())}.csv`, csv, MimeType.CSV);
-  SpreadsheetApp.getUi().alert('Export Complete', `CSV file created:\n${file.getUrl()}`, SpreadsheetApp.getUi().ButtonSet.OK);
+  return {
+    message: 'Payroll Output CSV exported.',
+    fileUrl: file.getUrl()
+  };
 }
 
 function getClockAppInitialState(identity) {
-  return getClockState(identity);
+  return getPortalInitialState(identity);
+}
+
+function getPortalInitialState(identity) {
+  const portalUser = resolvePortalUser_(identity);
+  if (!portalUser.authenticated) {
+    return {
+      authenticated: false,
+      mode: 'login',
+      activeUserEmail: portalUser.activeUserEmail || getActiveUserEmail_(),
+      message: portalUser.message || 'Enter your employee code and PIN to clock in.'
+    };
+  }
+  if (portalUser.role === 'Payroll Admin' || portalUser.role === 'Attendance Admin') {
+    const dashboard = portalUser.role === 'Payroll Admin'
+      ? buildPayrollAdminDashboardData_(portalUser)
+      : buildAttendanceAdminDashboardData_(portalUser);
+    return {
+      authenticated: true,
+      mode: 'admin',
+      portalUser,
+      dashboard
+    };
+  }
+  return Object.assign(getClockState(identity), {
+    mode: 'employee',
+    portalUser
+  });
 }
 
 function getClockState(identity) {
@@ -783,6 +853,398 @@ function getClockState(identity) {
   };
 }
 
+function refreshPortalDashboard(identity) {
+  return withPortalAuthContext_(identity, function() {
+    const portalUser = requirePortalRole_('Attendance Admin');
+    return portalUser.role === 'Payroll Admin'
+      ? buildPayrollAdminDashboardData_(portalUser)
+      : buildAttendanceAdminDashboardData_(portalUser);
+  });
+}
+
+function getAttendanceAdminDashboardData(identity) {
+  return withPortalAuthContext_(identity, function() {
+    return buildAttendanceAdminDashboardData_(requirePortalRole_('Attendance Admin'));
+  });
+}
+
+function getPayrollAdminDashboardData(identity) {
+  return withPortalAuthContext_(identity, function() {
+    return buildPayrollAdminDashboardData_(requirePortalRole_('Payroll Admin'));
+  });
+}
+
+function getPortalTableData(tabKey, filters, identity) {
+  return withPortalAuthContext_(identity, function() {
+    const definition = getPortalTableDefinition_(tabKey);
+    if (!definition) throw new Error(`Unknown data view: ${tabKey}`);
+    requirePortalRole_(definition.role);
+    const ss = definition.source === 'payroll' ? requirePayrollSpreadsheet_() : requireAttendanceSpreadsheet_();
+    const sheet = getSheet_(ss, definition.tabName);
+    const lastRow = sheet.getLastRow();
+    const lastColumn = sheet.getLastColumn();
+    const headers = lastColumn ? sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0] : [];
+    const query = String((filters && filters.query) || '').trim().toLowerCase();
+    const limit = Math.min(Math.max(Number((filters && filters.limit) || 100), 1), 250);
+    const offset = Math.max(Number((filters && filters.offset) || 0), 0);
+    const totalDataRows = Math.max(lastRow - 1, 0);
+    let rows = [];
+    let totalRows = totalDataRows;
+
+    if (query) {
+      const values = totalDataRows && lastColumn
+        ? sheet.getRange(2, 1, totalDataRows, lastColumn).getDisplayValues()
+        : [];
+      const matched = values
+        .filter(row => row.some(cell => String(cell || '').trim() !== ''))
+        .filter(row => row.some(cell => String(cell || '').toLowerCase().indexOf(query) !== -1));
+      totalRows = matched.length;
+      rows = matched.slice(offset, offset + limit);
+    } else if (totalDataRows && lastColumn && offset < totalDataRows) {
+      const rowCount = Math.min(limit, totalDataRows - offset);
+      rows = sheet.getRange(2 + offset, 1, rowCount, lastColumn).getDisplayValues()
+        .filter(row => row.some(cell => String(cell || '').trim() !== ''));
+    }
+
+    return {
+      tabKey,
+      title: definition.title,
+      source: definition.source,
+      spreadsheetUrl: ss.getUrl(),
+      headers,
+      rows,
+      offset,
+      limit,
+      totalRows,
+      displayedRows: rows.length,
+      hasPrevious: offset > 0,
+      hasNext: offset + rows.length < totalRows,
+      query: query
+    };
+  });
+}
+
+function getPortalActionData(action, payload, identity) {
+  return withPortalAuthContext_(identity, function() {
+  action = String(action || '').trim();
+  const requiredRole = getPortalActionRole_(action);
+  if (!requiredRole) throw new Error(`Unknown dashboard action: ${action}`);
+  requirePortalRole_(requiredRole);
+  payload = payload || {};
+  if (action === 'manualClock') return getManualClockEventDialogData();
+  if (action === 'editAttendance') return getEditAttendanceLogDialogData();
+  if (action === 'timeOffRequest') return getTimeOffRequestDialogData();
+  if (action === 'timeOffPreview') return previewTimeOffRequest(payload);
+  if (action === 'makeupRequest') return getMakeupRequestDialogData();
+  if (action === 'pendingRequests') return getPendingRequestsDialogData();
+  if (action === 'scorecard') return getScorecardDialogData();
+  if (action === 'employeeScorecard') return getEmployeeScorecard(payload);
+  if (action === 'timestampRevisions') return getTimestampRevisionApprovalData();
+  if (action === 'calculatePayPeriod') return getCalculatePayPeriodDialogData();
+  if (action === 'calculatePayPeriodEmployees') return getCalculatePayPeriodEmployees(payload.periodId);
+  if (action === 'kpiDialog') return getKpiBonusDialogData();
+  if (action === 'kpiPeriod') return getKpiBonusPeriodData(payload.periodId);
+  if (action === 'bonusAdjustment') return getBonusAdjustmentDialogData(payload.entryMode);
+  if (action === 'compensationChange') return getCompensationChangeDialogData();
+  if (action === 'compensationChangeEmployee') return getCompensationChangeEmployeeData(payload.employeeCode, payload.effectiveDate);
+  if (action === 'offboard') return getOffboardDialogData();
+  if (action === 'offboardPreview') return getOffboardPreview(payload);
+  if (action === 'reactivate') return getReactivateDialogData();
+  if (action === 'reactivateEmployee') return getReactivateEmployeeData(payload.employeeCode);
+  if (action === 'addEmployeeDefaults') return getAddEmployeeDefaults();
+  throw new Error(`No loader is configured for dashboard action: ${action}`);
+  });
+}
+
+function runPortalAction(action, payload, identity) {
+  return withPortalAuthContext_(identity, function() {
+  action = String(action || '').trim();
+  const requiredRole = getPortalActionRole_(action);
+  if (!requiredRole) throw new Error(`Unknown dashboard action: ${action}`);
+  requirePortalRole_(requiredRole);
+  payload = payload || {};
+  let result;
+  if (action === 'addManualClockEvent') result = addManualClockEvent(payload);
+  else if (action === 'editAttendanceLogEntry') result = editAttendanceLogEntry(payload);
+  else if (action === 'rebuildAttendanceLog') result = rebuildAttendanceLog(Object.assign({}, payload, { formatMode: 'targeted' }));
+  else if (action === 'refreshPtoBalances') result = refreshPtoBalances();
+  else if (action === 'submitTimeOffRequest') result = submitTimeOffRequest(payload);
+  else if (action === 'submitMakeupHourRequest') result = submitMakeupHourRequest(payload);
+  else if (action === 'processPendingRequests') result = processPendingRequests(payload);
+  else if (action === 'saveScorecard') result = saveScorecardToSheet(payload);
+  else if (action === 'addEmployee') result = addEmployee(payload);
+  else if (action === 'processTimestampRevisions') result = processTimestampRevisionRequests(payload);
+  else if (action === 'calculatePayPeriod') result = calculatePayPeriod(payload);
+  else if (action === 'markPayPeriodPaid') result = markPayPeriodPaid(payload.periodId);
+  else if (action === 'refreshQuarterlyPaTracker') result = refreshQuarterlyPaTracker();
+  else if (action === 'saveKpiBonuses') result = saveKpiBonuses(payload);
+  else if (action === 'addBonusAdjustment') result = addBonusAdjustment(payload);
+  else if (action === 'saveCompensationChange') result = saveCompensationChange(payload);
+  else if (action === 'offboardEmployee') result = offboardEmployee(payload);
+  else if (action === 'reactivateEmployee') result = reactivateEmployee(payload);
+  else if (action === 'exportPayrollOutputCsv') result = exportPayrollOutputCsvForPortal();
+  else throw new Error(`No runner is configured for dashboard action: ${action}`);
+  return Object.assign({ ok: true, refreshDashboard: true }, result || {});
+  });
+}
+
+function buildAttendanceAdminDashboardData_(portalUser) {
+  const attendance = requireAttendanceSpreadsheet_();
+  const payroll = requirePayrollSpreadsheet_();
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
+  const today = dateOnly_(new Date());
+  const period = getCurrentTimesheetPayPeriod_(payroll, today);
+  const employees = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees));
+  const activeEmployees = employees.filter(row => (row.Status || 'Active') === 'Active' || row.Status === '');
+  const pendingTimeOff = getPendingTimeOffRequestsForDashboard_(attendance);
+  const pendingMakeup = getPendingMakeupRequestsForDashboard_(attendance);
+  const pendingRevisions = getPendingTimestampRevisionsForDashboard_(attendance);
+  const attentionRows = getAttendanceAttentionRowsForDashboard_(attendance, addDays_(today, -14), today);
+  return {
+    role: portalUser.role,
+    generatedAt: displayDateTime_(new Date()),
+    currentPeriod: clientWindow_(period),
+    sourceUrls: {
+      attendance: attendance.getUrl()
+    },
+    metrics: [
+      { key: 'activeEmployees', label: 'Active Employees', value: activeEmployees.length },
+      { key: 'pendingRequests', label: 'Time Off / Makeup', value: pendingTimeOff.length + pendingMakeup.length },
+      { key: 'timestampRevisions', label: 'Timestamp Revisions', value: pendingRevisions.length },
+      { key: 'timesheetFlags', label: 'Timesheet Flags', value: attentionRows.length }
+    ],
+    queues: {
+      timeOff: pendingTimeOff.slice(0, 12),
+      makeup: pendingMakeup.slice(0, 12),
+      timestampRevisions: pendingRevisions.slice(0, 12),
+      timesheetFlags: attentionRows.slice(0, 20)
+    },
+    dataTabs: getAllowedPortalTableDefinitions_(portalUser.role),
+    actions: getAllowedPortalActionDefinitions_(portalUser.role)
+  };
+}
+
+function buildPayrollAdminDashboardData_(portalUser) {
+  const data = buildAttendanceAdminDashboardData_(portalUser);
+  const payroll = requirePayrollSpreadsheet_();
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
+  const periods = listPayPeriodsForUi_();
+  const outputSheet = getSheet_(payroll, CONFIG.payrollTabs.output);
+  const calculationSheet = getSheet_(payroll, CONFIG.payrollTabs.calculations);
+  const outputRows = readTailObjects_(outputSheet, 12);
+  const calculationRows = readTailObjects_(calculationSheet, 12);
+  const outputRowCount = getSheetDataRowCount_(outputSheet);
+  const needReviewCount = countRowsContainingTextInColumn_(outputSheet, 'Notes / Flags', 'needs review');
+  const openPeriods = periods.filter(period => period.status === 'Open');
+  const calculatedPeriods = periods.filter(period => period.status === 'Calculated');
+  data.sourceUrls.payroll = payroll.getUrl();
+  data.payroll = {
+    periods,
+    defaultPeriodId: getDefaultOpenPeriodId_(periods),
+    metrics: [
+      { key: 'openPeriods', label: 'Open Periods', value: openPeriods.length },
+      { key: 'calculatedPeriods', label: 'Calculated Periods', value: calculatedPeriods.length },
+      { key: 'outputRows', label: 'Payroll Output Rows', value: outputRowCount },
+      { key: 'needsReview', label: 'Needs Review', value: needReviewCount }
+    ],
+    recentOutput: outputRows.slice().reverse().map(row => ({
+      periodId: normalizePeriodId_(row['Period ID']),
+      employeeCode: normalizeCode_(row['Employee Code']),
+      netPay: row['Net Pay'],
+      status: row['Status'],
+      notes: row['Notes / Flags'] || ''
+    })),
+    recentCalculations: calculationRows.slice().reverse().map(row => ({
+      periodId: normalizePeriodId_(row['Period ID']),
+      employeeCode: normalizeCode_(row['Employee Code']),
+      grossPay: row['Gross Pay'],
+      notes: row['Notes / Flags'] || ''
+    }))
+  };
+  return data;
+}
+
+function getPendingTimeOffRequestsForDashboard_(attendance) {
+  const employees = getEmployeeDisplayMap_(attendance);
+  return readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timeOffRequests))
+    .filter(row => row['Status (Pending/Approved/Denied)'] === 'Pending')
+    .map(row => {
+      const code = normalizeCode_(row['Employee Code']);
+      return {
+        requestId: row['Request ID'],
+        employeeCode: code,
+        employee: employees[code] || code,
+        type: row['Type (PTO/UTO/Non-PTO)'] || '',
+        dateRange: `${displayDate_(row['Start Date'])} - ${displayDate_(row['End Date'])}`,
+        hours: toNumberOrBlank_(row['Requested Hours']),
+        reason: row.Reason || ''
+      };
+    });
+}
+
+function getPendingMakeupRequestsForDashboard_(attendance) {
+  const employees = getEmployeeDisplayMap_(attendance);
+  return readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.makeupRequests))
+    .filter(row => row['Status (Pending/Approved/Denied)'] === 'Pending')
+    .map(row => {
+      const code = normalizeCode_(row['Employee Code']);
+      return {
+        requestId: row['Request ID'],
+        employeeCode: code,
+        employee: employees[code] || code,
+        workDate: displayDate_(row.Date),
+        hours: toNumberOrBlank_(row['Hours Requested']),
+        reason: row.Reason || ''
+      };
+    });
+}
+
+function getPendingTimestampRevisionsForDashboard_(attendance) {
+  const employees = getEmployeeDisplayMap_(attendance);
+  return readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.timestampRevisions))
+    .filter(row => row['Status (Pending/Approved/Denied)'] === 'Pending')
+    .map(row => {
+      const code = normalizeCode_(row['Employee Code']);
+      return {
+        requestId: row['Request ID'],
+        employeeCode: code,
+        employee: employees[code] || code,
+        workDate: displayDate_(row['Work Date']),
+        eventType: row['Event Type'],
+        eventLabel: CONFIG.eventLabels[row['Event Type']] || row['Event Type'] || '',
+        requestedTimestamp: displayDateTime_(row['Requested Timestamp']),
+        reason: row.Reason || ''
+      };
+    });
+}
+
+function getAttendanceAttentionRowsForDashboard_(attendance, startDate, endDate) {
+  const start = dateOnly_(startDate).getTime();
+  const end = dateOnly_(endDate).getTime();
+  return readObjectsForDateWindow_(getSheet_(attendance, CONFIG.attendanceTabs.log), 'Date', startDate, endDate)
+    .filter(row => {
+      const date = parseDateOrBlank_(row.Date);
+      if (!date) return false;
+      const time = dateOnly_(date).getTime();
+      if (time < start || time > end) return false;
+      const status = String(row.Status || '');
+      const late = toNumberOrZero_(row['Total Late Minutes']);
+      const worked = toNumberOrBlank_(row['Worked Hours']);
+      const scheduledStart = parseDateOrBlank_(row['Scheduled Start']);
+      const scheduledEnd = parseDateOrBlank_(row['Scheduled End']);
+      const isScheduled = Boolean(scheduledStart && scheduledEnd);
+      return ['Absent', 'Incomplete (no clock-out)'].indexOf(status) !== -1
+        || late > 0
+        || (isScheduled && worked !== '' && worked < 8 && ['PTO', 'UTO', 'Non-PTO', 'Holiday'].indexOf(status) === -1);
+    })
+    .sort((a, b) => parseDateOrBlank_(b.Date).getTime() - parseDateOrBlank_(a.Date).getTime())
+    .map(row => ({
+      date: displayDate_(row.Date),
+      employeeCode: normalizeCode_(row['Employee Code']),
+      employee: row['Display Name'] || row['Employee Code'],
+      status: row.Status || '',
+      workedHours: toNumberOrBlank_(row['Worked Hours']),
+      lateMinutes: toNumberOrZero_(row['Total Late Minutes'])
+    }));
+}
+
+function getPortalTableDefinition_(tabKey) {
+  return getPortalTableDefinitions_().filter(definition => definition.key === tabKey)[0] || null;
+}
+
+function getPortalTableDefinitions_() {
+  return [
+    { key: 'employees', title: 'Employees', source: 'attendance', tabName: CONFIG.attendanceTabs.employees, role: 'Attendance Admin' },
+    { key: 'workSchedules', title: 'Work Schedules', source: 'attendance', tabName: CONFIG.attendanceTabs.schedules, role: 'Attendance Admin' },
+    { key: 'holidays', title: 'Holidays', source: 'attendance', tabName: CONFIG.attendanceTabs.holidays, role: 'Attendance Admin' },
+    { key: 'clockEvents', title: 'Clock Events', source: 'attendance', tabName: CONFIG.attendanceTabs.events, role: 'Attendance Admin' },
+    { key: 'attendanceLog', title: 'Attendance Log', source: 'attendance', tabName: CONFIG.attendanceTabs.log, role: 'Attendance Admin' },
+    { key: 'timeOffRequests', title: 'Time Off Requests', source: 'attendance', tabName: CONFIG.attendanceTabs.timeOffRequests, role: 'Attendance Admin' },
+    { key: 'ptoBalances', title: 'PTO Balances', source: 'attendance', tabName: CONFIG.attendanceTabs.ptoBalances, role: 'Attendance Admin' },
+    { key: 'makeupRequests', title: 'Makeup Hour Requests', source: 'attendance', tabName: CONFIG.attendanceTabs.makeupRequests, role: 'Attendance Admin' },
+    { key: 'timestampRevisions', title: 'Timestamp Revision Requests', source: 'attendance', tabName: CONFIG.attendanceTabs.timestampRevisions, role: 'Attendance Admin' },
+    { key: 'compensation', title: 'Compensation Master', source: 'payroll', tabName: CONFIG.payrollTabs.comp, role: 'Payroll Admin' },
+    { key: 'payPeriods', title: 'Pay Periods', source: 'payroll', tabName: CONFIG.payrollTabs.periods, role: 'Payroll Admin' },
+    { key: 'payrollCalculations', title: 'Payroll Calculations', source: 'payroll', tabName: CONFIG.payrollTabs.calculations, role: 'Payroll Admin' },
+    { key: 'payrollOutput', title: 'Payroll Output', source: 'payroll', tabName: CONFIG.payrollTabs.output, role: 'Payroll Admin' },
+    { key: 'lifecycleLog', title: 'Employee Lifecycle Log', source: 'payroll', tabName: CONFIG.payrollTabs.lifecycle, role: 'Payroll Admin' },
+    { key: 'compChangeLog', title: 'Compensation Change Log', source: 'payroll', tabName: CONFIG.payrollTabs.compChanges, role: 'Payroll Admin' },
+    { key: 'paTracker', title: 'Quarterly PA Tracker', source: 'payroll', tabName: CONFIG.payrollTabs.paTracker, role: 'Payroll Admin' },
+    { key: 'bonuses', title: 'Bonuses & Adjustments', source: 'payroll', tabName: CONFIG.payrollTabs.bonuses, role: 'Payroll Admin' }
+  ];
+}
+
+function getAllowedPortalTableDefinitions_(role) {
+  return getPortalTableDefinitions_()
+    .filter(definition => hasPortalPermission_(role, definition.role))
+    .map(definition => ({
+      key: definition.key,
+      title: definition.title,
+      source: definition.source,
+      role: definition.role
+    }));
+}
+
+function getPortalActionRole_(action) {
+  const definition = getPortalActionDefinitions_().filter(item => item.key === action)[0];
+  return definition ? definition.role : '';
+}
+
+function getPortalActionDefinitions_() {
+  return [
+    { key: 'manualClock', label: 'Manual Clock Entry', role: 'Attendance Admin', section: 'Attendance' },
+    { key: 'addManualClockEvent', label: 'Save Manual Clock Entry', role: 'Attendance Admin', section: 'Attendance' },
+    { key: 'editAttendance', label: 'Edit Attendance Status', role: 'Attendance Admin', section: 'Attendance' },
+    { key: 'editAttendanceLogEntry', label: 'Save Attendance Status', role: 'Attendance Admin', section: 'Attendance' },
+    { key: 'rebuildAttendanceLog', label: 'Rebuild Attendance Log', role: 'Attendance Admin', section: 'Attendance' },
+    { key: 'refreshPtoBalances', label: 'Refresh PTO Balances', role: 'Attendance Admin', section: 'Attendance' },
+    { key: 'timeOffRequest', label: 'Submit Time Off', role: 'Attendance Admin', section: 'Requests' },
+    { key: 'timeOffPreview', label: 'Preview Time Off', role: 'Attendance Admin', section: 'Requests' },
+    { key: 'submitTimeOffRequest', label: 'Save Time Off Request', role: 'Attendance Admin', section: 'Requests' },
+    { key: 'makeupRequest', label: 'Submit Makeup Hours', role: 'Attendance Admin', section: 'Requests' },
+    { key: 'submitMakeupHourRequest', label: 'Save Makeup Request', role: 'Attendance Admin', section: 'Requests' },
+    { key: 'pendingRequests', label: 'Approve Time Off / Makeup', role: 'Attendance Admin', section: 'Requests' },
+    { key: 'processPendingRequests', label: 'Save Request Decisions', role: 'Attendance Admin', section: 'Requests' },
+    { key: 'scorecard', label: 'Scorecards', role: 'Attendance Admin', section: 'Attendance' },
+    { key: 'employeeScorecard', label: 'Load Scorecard', role: 'Attendance Admin', section: 'Attendance' },
+    { key: 'saveScorecard', label: 'Save Scorecard', role: 'Attendance Admin', section: 'Attendance' },
+    { key: 'addEmployeeDefaults', label: 'Add Employee Defaults', role: 'Attendance Admin', section: 'Employees' },
+    { key: 'addEmployee', label: 'Add Employee', role: 'Attendance Admin', section: 'Employees' },
+    { key: 'timestampRevisions', label: 'Approve Timestamp Revisions', role: 'Payroll Admin', section: 'Requests' },
+    { key: 'processTimestampRevisions', label: 'Save Timestamp Decisions', role: 'Payroll Admin', section: 'Requests' },
+    { key: 'calculatePayPeriod', label: 'Calculate Pay Period', role: 'Payroll Admin', section: 'Payroll' },
+    { key: 'calculatePayPeriodEmployees', label: 'Load Period Employees', role: 'Payroll Admin', section: 'Payroll' },
+    { key: 'markPayPeriodPaid', label: 'Mark Paid', role: 'Payroll Admin', section: 'Payroll' },
+    { key: 'refreshQuarterlyPaTracker', label: 'Refresh PA Tracker', role: 'Payroll Admin', section: 'Payroll' },
+    { key: 'kpiDialog', label: 'KPI Bonuses', role: 'Payroll Admin', section: 'Payroll' },
+    { key: 'kpiPeriod', label: 'Load KPI Period', role: 'Payroll Admin', section: 'Payroll' },
+    { key: 'saveKpiBonuses', label: 'Save KPI Bonuses', role: 'Payroll Admin', section: 'Payroll' },
+    { key: 'bonusAdjustment', label: 'Bonuses / Adjustments', role: 'Payroll Admin', section: 'Payroll' },
+    { key: 'addBonusAdjustment', label: 'Save Bonus / Adjustment', role: 'Payroll Admin', section: 'Payroll' },
+    { key: 'compensationChange', label: 'Compensation Change', role: 'Payroll Admin', section: 'Lifecycle' },
+    { key: 'compensationChangeEmployee', label: 'Load Compensation', role: 'Payroll Admin', section: 'Lifecycle' },
+    { key: 'saveCompensationChange', label: 'Save Compensation Change', role: 'Payroll Admin', section: 'Lifecycle' },
+    { key: 'offboard', label: 'Offboard Employee', role: 'Payroll Admin', section: 'Lifecycle' },
+    { key: 'offboardPreview', label: 'Preview Final Payroll', role: 'Payroll Admin', section: 'Lifecycle' },
+    { key: 'offboardEmployee', label: 'Save Offboarding', role: 'Payroll Admin', section: 'Lifecycle' },
+    { key: 'reactivate', label: 'Reactivate Employee', role: 'Payroll Admin', section: 'Lifecycle' },
+    { key: 'reactivateEmployee', label: 'Load Reactivation', role: 'Payroll Admin', section: 'Lifecycle' },
+    { key: 'exportPayrollOutputCsv', label: 'Export Payroll CSV', role: 'Payroll Admin', section: 'Payroll' }
+  ];
+}
+
+function getAllowedPortalActionDefinitions_(role) {
+  return getPortalActionDefinitions_()
+    .filter(definition => hasPortalPermission_(role, definition.role))
+    .map(definition => ({
+      key: definition.key,
+      label: definition.label,
+      section: definition.section,
+      role: definition.role
+    }));
+}
+
 function recordClockEvent(payload) {
   payload = payload || {};
   if (CONFIG.eventTypes.indexOf(payload.eventType) === -1) {
@@ -815,8 +1277,12 @@ function getAddEmployeeDefaults() {
     today: formatDateKey_(new Date()),
     statuses: ['Active', 'Inactive', 'Resigned', 'Terminated'],
     departments: CONFIG.departments,
+    portalRoles: CONFIG.portalRoles,
+    defaultPortalRole: CONFIG.defaultPortalRole,
     ptoPlanTypes: CONFIG.ptoPlanTypes,
-    defaultPtoPlanType: CONFIG.defaultPtoPlanType
+    defaultPtoPlanType: CONFIG.defaultPtoPlanType,
+    compFields: getCompFieldConfig_(),
+    defaultSchedule: getDefaultPortalSchedule_()
   };
 }
 
@@ -831,8 +1297,13 @@ function addEmployee_(payload) {
   const code = normalizeCode_(payload.employeeCode || suggestEmployeeCode_(payload.fullName));
   if (!code) throw new Error('Employee Code is required.');
   if (!payload.fullName) throw new Error('Full Name is required.');
+  const requester = requirePortalRole_(payload.includeComp ? 'Payroll Admin' : 'Attendance Admin');
   const department = normalizeDepartment_(payload.department);
   if (!department) throw new Error('Department is required.');
+  const portalRole = normalizePortalRole_(payload.portalRole);
+  if (hasPortalPermission_(portalRole, 'Payroll Admin') && !hasPortalPermission_(requester.role, 'Payroll Admin')) {
+    throw new Error('Payroll Admin access is required to assign the Payroll Admin portal role.');
+  }
 
   const attendance = requireAttendanceSpreadsheet_();
   const payroll = requirePayrollSpreadsheet_();
@@ -858,7 +1329,8 @@ function addEmployee_(payload) {
     payload.email || '',
     payload.pin || '',
     payload.notes || '',
-    department
+    department,
+    portalRole
   ];
   const employeeRange = appendRows_(employeeSheet, [employeeRow]);
 
@@ -907,6 +1379,7 @@ function addEmployee_(payload) {
 }
 
 function getManualClockEventDialogData() {
+  requirePortalRole_('Attendance Admin');
   return {
     employees: listEmployeesForUi_(),
     eventTypes: CONFIG.eventTypes.map(type => ({ type, label: CONFIG.eventLabels[type] })),
@@ -915,6 +1388,7 @@ function getManualClockEventDialogData() {
 }
 
 function addManualClockEvent(payload) {
+  requirePortalRole_('Attendance Admin');
   payload = payload || {};
   const employeeCode = normalizeCode_(payload.employeeCode);
   if (!employeeCode) throw new Error('Employee is required.');
@@ -936,6 +1410,7 @@ function addManualClockEvent(payload) {
 }
 
 function getEditAttendanceLogDialogData() {
+  requirePortalRole_('Attendance Admin');
   return {
     employees: listEmployeesForUi_(),
     statuses: CONFIG.statuses,
@@ -944,6 +1419,7 @@ function getEditAttendanceLogDialogData() {
 }
 
 function editAttendanceLogEntry(payload) {
+  requirePortalRole_('Attendance Admin');
   payload = payload || {};
   const employeeCode = normalizeCode_(payload.employeeCode);
   const date = parseDateOrBlank_(payload.date);
@@ -975,8 +1451,6 @@ function editAttendanceLogEntry(payload) {
 function getTimeOffRequestDialogData() {
   const attendance = requireAttendanceSpreadsheet_();
   setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
-  refreshPtoBalances_(attendance);
-  applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.ptoBalances);
   return {
     employees: listEmployeesForUi_().filter(employee => employee.status === 'Active' || employee.status === ''),
     types: CONFIG.timeOffTypes,
@@ -986,6 +1460,7 @@ function getTimeOffRequestDialogData() {
 }
 
 function submitTimeOffRequest(payload) {
+  requirePortalRole_('Attendance Admin');
   const result = createTimeOffRequest_(payload, 'SHEET_MENU');
   return {
     message: `${result.type} request ${result.requestId} submitted for ${result.employeeCode}. Manager approval is required before payroll uses it.`
@@ -1037,6 +1512,7 @@ function getMakeupRequestDialogData() {
 }
 
 function submitMakeupHourRequest(payload) {
+  requirePortalRole_('Attendance Admin');
   const result = createMakeupHourRequest_(payload, 'SHEET_MENU');
   return {
     message: `Makeup request ${result.requestId} submitted for ${result.employeeCode}. Manager approval is required before payroll uses it.`
@@ -1154,6 +1630,7 @@ function submitTimestampRevisionRequest_(payload) {
 }
 
 function getTimestampRevisionApprovalData() {
+  requirePortalRole_('Payroll Admin');
   const attendance = requireAttendanceSpreadsheet_();
   setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   const employees = getEmployeeDisplayMap_(attendance);
@@ -1184,6 +1661,7 @@ function getTimestampRevisionApprovalData() {
 }
 
 function processTimestampRevisionRequests(payload) {
+  requirePortalRole_('Payroll Admin');
   return withScriptLock_('Process Timestamp Revision Requests', function() {
     return processTimestampRevisionRequests_(payload);
   });
@@ -1273,10 +1751,9 @@ function processTimestampRevisionRequests_(payload) {
 }
 
 function getPendingRequestsDialogData() {
+  requirePortalRole_('Attendance Admin');
   const attendance = requireAttendanceSpreadsheet_();
   setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
-  refreshPtoBalances_(attendance);
-  applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.ptoBalances);
   const employees = getEmployeeDisplayMap_(attendance);
   const balances = getPtoBalanceSummariesByEmployee_(attendance, new Date().getFullYear());
 
@@ -1324,6 +1801,7 @@ function getPendingRequestsDialogData() {
 }
 
 function processPendingRequests(payload) {
+  requirePortalRole_('Attendance Admin');
   return withScriptLock_('Process Pending Requests', function() {
     return processPendingRequests_(payload);
   });
@@ -1414,6 +1892,7 @@ function processPendingRequests_(payload) {
 }
 
 function refreshPtoBalances() {
+  requirePortalRole_('Attendance Admin');
   const attendance = requireAttendanceSpreadsheet_();
   setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   const rows = refreshPtoBalances_(attendance);
@@ -1425,6 +1904,7 @@ function refreshPtoBalances() {
 }
 
 function getCalculatePayPeriodDialogData() {
+  requirePortalRole_('Payroll Admin');
   const payroll = requirePayrollSpreadsheet_();
   const periods = readObjects_(getSheet_(payroll, CONFIG.payrollTabs.periods)).map(row => ({
     periodId: normalizePeriodId_(row['Period ID']),
@@ -1443,6 +1923,7 @@ function getCalculatePayPeriodDialogData() {
 }
 
 function getCalculatePayPeriodEmployees(periodId) {
+  requirePortalRole_('Payroll Admin');
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
   const period = getPayPeriodById_(payroll, periodId);
@@ -1455,6 +1936,7 @@ function getCalculatePayPeriodEmployees(periodId) {
 }
 
 function getScorecardDialogData() {
+  requirePortalRole_('Attendance Admin');
   const attendance = requireAttendanceSpreadsheet_();
   setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   return {
@@ -1465,6 +1947,7 @@ function getScorecardDialogData() {
 }
 
 function getKpiBonusDialogData() {
+  requirePortalRole_('Payroll Admin');
   const payroll = requirePayrollSpreadsheet_();
   ensurePhase3PayrollSheets_(payroll);
   ensurePayPeriodsForDialog_(payroll);
@@ -1476,6 +1959,7 @@ function getKpiBonusDialogData() {
 }
 
 function getKpiBonusPeriodData(periodId) {
+  requirePortalRole_('Payroll Admin');
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
   ensurePhase3PayrollSheets_(payroll);
@@ -1513,6 +1997,7 @@ function getKpiBonusPeriodData(periodId) {
 }
 
 function saveKpiBonuses(payload) {
+  requirePortalRole_('Payroll Admin');
   return withScriptLock_('Save KPI Bonuses', function() {
     return saveKpiBonuses_(payload);
   });
@@ -1563,6 +2048,7 @@ function saveKpiBonuses_(payload) {
 }
 
 function getBonusAdjustmentDialogData(entryMode) {
+  requirePortalRole_('Payroll Admin');
   const payroll = requirePayrollSpreadsheet_();
   ensurePhase3PayrollSheets_(payroll);
   const periods = listPayPeriodsForUi_();
@@ -1575,6 +2061,7 @@ function getBonusAdjustmentDialogData(entryMode) {
 }
 
 function addBonusAdjustment(payload) {
+  requirePortalRole_('Payroll Admin');
   return withScriptLock_('Add Bonus Adjustment', function() {
     return addBonusAdjustment_(payload);
   });
@@ -1615,6 +2102,7 @@ function addBonusAdjustment_(payload) {
 }
 
 function getCompensationChangeDialogData() {
+  requirePortalRole_('Payroll Admin');
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
   setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
@@ -1624,11 +2112,13 @@ function getCompensationChangeDialogData() {
     employees: listEmployeesForLifecycleUi_(['Active', '']),
     periods,
     defaultEffectiveFrom: formatDateKey_(getFirstDayOfNextMonth_()),
-    defaultAdjustmentPeriodId: getDefaultOpenPeriodId_(periods)
+    defaultAdjustmentPeriodId: getDefaultOpenPeriodId_(periods),
+    compFields: getCompFieldConfig_()
   };
 }
 
 function getCompensationChangeEmployeeData(employeeCode, effectiveFrom) {
+  requirePortalRole_('Payroll Admin');
   const payroll = requirePayrollSpreadsheet_();
   setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
   const code = normalizeCode_(employeeCode);
@@ -1651,6 +2141,7 @@ function getCompensationChangeEmployeeData(employeeCode, effectiveFrom) {
 }
 
 function saveCompensationChange(payload) {
+  requirePortalRole_('Payroll Admin');
   return withScriptLock_('Save Compensation Change', function() {
     return saveCompensationChange_(payload);
   });
@@ -1761,6 +2252,7 @@ function saveCompensationChange_(payload) {
 }
 
 function getOffboardDialogData() {
+  requirePortalRole_('Payroll Admin');
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
   setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
@@ -1773,6 +2265,7 @@ function getOffboardDialogData() {
 }
 
 function getOffboardPreview(payload) {
+  requirePortalRole_('Payroll Admin');
   payload = payload || {};
   const code = normalizeCode_(payload.employeeCode);
   const lastWorkingDay = parseDateOrBlank_(payload.lastWorkingDay);
@@ -1786,6 +2279,7 @@ function getOffboardPreview(payload) {
 }
 
 function offboardEmployee(payload) {
+  requirePortalRole_('Payroll Admin');
   return withScriptLock_('Offboard Employee', function() {
     return offboardEmployee_(payload);
   });
@@ -1852,6 +2346,7 @@ function offboardEmployee_(payload) {
 }
 
 function getReactivateDialogData() {
+  requirePortalRole_('Payroll Admin');
   const payroll = requirePayrollSpreadsheet_();
   const attendance = requireAttendanceSpreadsheet_();
   setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
@@ -1860,11 +2355,14 @@ function getReactivateDialogData() {
     employees: listEmployeesForLifecycleUi_(['Inactive', 'Resigned', 'Terminated']),
     today: formatDateKey_(new Date()),
     ptoPlanTypes: CONFIG.ptoPlanTypes,
-    defaultPtoPlanType: CONFIG.defaultPtoPlanType
+    defaultPtoPlanType: CONFIG.defaultPtoPlanType,
+    compFields: getCompFieldConfig_(),
+    defaultSchedule: getDefaultPortalSchedule_()
   };
 }
 
 function getReactivateEmployeeData(employeeCode) {
+  requirePortalRole_('Payroll Admin');
   const attendance = requireAttendanceSpreadsheet_();
   setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
   const code = normalizeCode_(employeeCode);
@@ -1879,6 +2377,7 @@ function getReactivateEmployeeData(employeeCode) {
 }
 
 function reactivateEmployee(payload) {
+  requirePortalRole_('Payroll Admin');
   return withScriptLock_('Reactivate Employee', function() {
     return reactivateEmployee_(payload);
   });
@@ -1945,6 +2444,7 @@ function reactivateEmployee_(payload) {
 }
 
 function getEmployeeScorecard(payload) {
+  requirePortalRole_('Attendance Admin');
   payload = payload || {};
   const employeeCode = normalizeCode_(payload.employeeCode);
   const monthKey = payload.month;
@@ -1962,6 +2462,7 @@ function getEmployeeScorecard(payload) {
 }
 
 function saveScorecardToSheet(payload) {
+  requirePortalRole_('Attendance Admin');
   const scorecard = getEmployeeScorecard(payload);
   const attendance = requireAttendanceSpreadsheet_();
   writeScorecardSheet_(attendance, scorecard);
@@ -1972,6 +2473,7 @@ function saveScorecardToSheet(payload) {
 }
 
 function refreshQuarterlyPaTracker() {
+  requirePortalRole_('Payroll Admin');
   const attendance = requireAttendanceSpreadsheet_();
   const payroll = requirePayrollSpreadsheet_();
   setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
@@ -2007,6 +2509,7 @@ function refreshQuarterlyPaTracker() {
 }
 
 function calculatePayPeriod(payload) {
+  requirePortalRole_('Payroll Admin');
   return withScriptLock_('Calculate Pay Period', function() {
     return calculatePayPeriod_(payload);
   });
@@ -2072,6 +2575,7 @@ function calculatePayPeriod_(payload) {
 }
 
 function markPayPeriodPaid(periodId) {
+  requirePortalRole_('Payroll Admin');
   const payroll = requirePayrollSpreadsheet_();
   periodId = normalizePeriodId_(periodId);
   repairPayPeriodIds_(payroll);
@@ -2194,10 +2698,33 @@ function setupAttendanceSpreadsheet_(ss, options) {
   ensureSheet_(ss, CONFIG.attendanceTabs.makeupRequests, HEADERS.makeupRequests);
   ensureSheet_(ss, CONFIG.attendanceTabs.timestampRevisions, HEADERS.timestampRevisions);
   ensureScorecardSheet_(ss);
-  if (runMigrations) migrateScheduleTimeDisplays_(ss);
+  if (runMigrations) {
+    migrateScheduleTimeDisplays_(ss);
+    migratePortalRoleDefaults_(ss);
+  }
   migrateHourlyTimeOffRequests_(ss);
   removeDefaultBlankSheet_(ss);
   if (options.formatMode !== 'none') applyAttendanceFormatting_(ss);
+}
+
+function migratePortalRoleDefaults_(attendance) {
+  const sheet = getSheet_(attendance, CONFIG.attendanceTabs.employees);
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return 0;
+  const headers = values[0];
+  const roleIdx = headers.indexOf('Portal Role');
+  if (roleIdx === -1) return 0;
+
+  let updated = 0;
+  for (let row = 1; row < values.length; row += 1) {
+    if (!values[row].some(cell => cell !== '' && cell !== null)) continue;
+    const normalized = normalizePortalRole_(values[row][roleIdx]);
+    if (values[row][roleIdx] !== normalized) {
+      sheet.getRange(row + 1, roleIdx + 1).setValue(normalized);
+      updated += 1;
+    }
+  }
+  return updated;
 }
 
 function setupPayrollSpreadsheet_(ss, options) {
@@ -3437,7 +3964,7 @@ function getAttendanceWorkflowGuide_() {
     subtitle: 'Use this workbook to collect clock events, manage approved leave, maintain schedules, and produce the reviewed attendance log that payroll consumes.',
     workbook: CONFIG.attendanceSpreadsheetName,
     owner: 'Operations manager',
-    entryPoint: 'Attendance menu',
+    entryPoint: 'Single web app dashboard; Attendance menu is fallback only',
     beforeUse: 'Confirm employees, schedules, and web app access.',
     cadence: 'Daily review, pay-period closeout',
     scope: 'Time capture, corrections, leave approvals, attendance status, scorecards',
@@ -3449,10 +3976,10 @@ function getAttendanceWorkflowGuide_() {
         headers: ['Step', 'Owner', 'Action', 'Where', 'When', 'Done When'],
         rows: [
           ['1', 'System owner', 'Run setupPhase1() or configurePhase1SpreadsheetIds().', 'Apps Script editor', 'Initial setup', 'Both workbook IDs are stored and menus appear on open.'],
-          ['2', 'Operations manager', 'Review active employees and schedules before sharing the clock app.', 'Employees and Work Schedules', 'Before launch', 'Every active employee has a department, schedule, and, if needed, a Web App PIN.'],
-          ['3', 'Employee', 'Clock in, start lunch, end lunch, and clock out in sequence.', 'Clock-in web app', 'Each workday', 'Clock Events receives an append-only record for each action.'],
-          ['4', 'Operations manager', 'Add missed or corrected punches without editing the audit trail directly.', 'Attendance menu', 'Same day when possible', 'Manual corrections show Source = MANUAL with useful notes.'],
-          ['5', 'Employee or manager', 'Submit PTO, UTO, Non-PTO, or makeup hour requests before closeout.', 'Clock app or Attendance menu', 'As needed', 'The request appears as Pending in the request tabs.'],
+          ['2', 'Operations manager', 'Review active employees, Portal Role, admin access key, and schedules before sharing the dashboard.', 'Employees, Work Schedules, Attendance menu', 'Before launch', 'Every active employee has a department, role, schedule, and, if needed, a Web App PIN; admins have the access key.'],
+          ['3', 'Employee', 'Clock in, start lunch, end lunch, and clock out in sequence.', 'Employee dashboard', 'Each workday', 'Clock Events receives an append-only record for each action.'],
+          ['4', 'Operations manager', 'Add missed or corrected punches without editing the audit trail directly.', 'Attendance dashboard', 'Same day when possible', 'Manual corrections show Source = MANUAL with useful notes.'],
+          ['5', 'Employee or manager', 'Submit PTO, UTO, Non-PTO, or makeup hour requests before closeout.', 'Employee dashboard', 'As needed', 'The request appears as Pending in the request tabs.'],
           ['6', 'Employee', 'Review current-period or recent timesheet rows and request timestamp revisions immediately when needed.', 'Clock app > Review Timesheet', 'Daily or as soon as an issue is noticed', 'Timestamp Revision Requests shows Pending rows; Attendance Log is unchanged until payroll approval.'],
           ['7', 'Operations manager', 'Approve or deny pending time off and makeup requests.', 'Attendance menu', 'Before payroll closeout', 'Approved time off can rebuild into Attendance Log; approved makeup can offset short hours.'],
           ['8', 'Operations manager', 'Rebuild the Attendance Log after corrections or approvals.', 'Attendance menu', 'Daily and at closeout', 'Attendance Log shows status, hours, late minutes, and exceptions.'],
@@ -3466,7 +3993,7 @@ function getAttendanceWorkflowGuide_() {
         description: 'Only edit source tabs intentionally. Treat derived tabs as review surfaces.',
         headers: ['Tab', 'Purpose', 'Primary User', 'Editable?', 'Key Fields', 'UX Rule'],
         rows: [
-          ['Employees', 'Roster and access control.', 'Operations manager', 'Yes', 'Employee Code, Department, Status, Email, Web App PIN', 'Set Department during onboarding and keep Employee Code stable; it joins every workbook.'],
+          ['Employees', 'Roster and access control.', 'Operations manager', 'Yes', 'Employee Code, Department, Status, Email, Web App PIN, Portal Role', 'Set Department and Portal Role during onboarding; admin login also requires the shared admin access key.'],
           ['Work Schedules', 'Effective-dated schedules by employee.', 'Operations manager', 'Yes', 'Effective From/To, day start/end, lunch window', 'Use HH:MMam/pm times and add a new row for schedule changes instead of overwriting history.'],
           ['Holidays', 'Paid holiday exceptions.', 'Operations manager', 'Yes', 'Date, Paid?, Applies To', 'Use All unless the holiday is employee-specific.'],
           ['Clock Events', 'Append-only clock event ledger.', 'Employees and managers', 'Append only', 'Timestamp, Employee Code, Event Type, Source', 'Do not delete production events; add a corrective manual event instead.'],
@@ -3516,7 +4043,7 @@ function getPayrollWorkflowGuide_() {
     subtitle: 'Use this workbook to maintain private compensation data, calculate payroll, and manage approved compensation and lifecycle changes without overwriting history.',
     workbook: CONFIG.payrollSpreadsheetName,
     owner: 'Payroll processor',
-    entryPoint: 'Payroll menu',
+    entryPoint: 'Single web app dashboard; Payroll menu is fallback only',
     beforeUse: 'Confirm attendance has been rebuilt and compensation is complete.',
     cadence: 'Mid-month and end-of-month payroll',
     scope: 'Base pay, deductions, benefits, bonuses, adjustments, compensation changes, lifecycle',
@@ -3530,9 +4057,9 @@ function getPayrollWorkflowGuide_() {
           ['1', 'Operations manager', 'Approve pending time off and makeup requests, then rebuild Attendance Log for the target period.', 'Attendance workbook', 'Before calculation', 'Attendance statuses, approved leave, makeup hours, and late minutes are current.'],
           ['2', 'Payroll processor', 'Review Compensation Master for blanks, effective dates, PTO Plan Type, and Monthly PTO Accrual Hours.', 'Compensation Master', 'Before calculation', 'Every paid employee has an active compensation row and PTO plan terms are intentional.'],
           ['3', 'Payroll processor', 'Confirm or create the target pay period.', 'Pay Periods', 'Each run', 'Period ID, dates, type, and status are correct.'],
-          ['4', 'Payroll processor', 'Approve or deny pending timestamp revisions before closeout.', 'Payroll menu > Approve Timestamp Revisions', 'Before calculation', 'Approved rows append manual correction events and rebuild affected Attendance Log dates.'],
-          ['5', 'Payroll processor', 'Enter KPI approvals, additional bonuses, and adjustments.', 'Payroll menu', 'Before calculation', 'Bonuses & Adjustments has approved entries with descriptions.'],
-          ['6', 'Payroll processor', 'Calculate the pay period.', 'Payroll menu', 'Each run', 'Payroll Calculations and Payroll Output are refreshed.'],
+          ['4', 'Payroll processor', 'Approve or deny pending timestamp revisions before closeout.', 'Payroll dashboard > Requests', 'Before calculation', 'Approved rows append manual correction events and rebuild affected Attendance Log dates.'],
+          ['5', 'Payroll processor', 'Enter KPI approvals, additional bonuses, and adjustments.', 'Payroll dashboard', 'Before calculation', 'Bonuses & Adjustments has approved entries with descriptions.'],
+          ['6', 'Payroll processor', 'Calculate the pay period.', 'Payroll dashboard', 'Each run', 'Payroll Calculations and Payroll Output are refreshed.'],
           ['7', 'Payroll approver', 'Review warnings, benefits, bonus statuses, deductions, and Needs review rows.', 'Payroll Calculations', 'Before payment', 'Exceptions have notes or correction actions.'],
           ['8', 'Payroll processor', 'Refresh quarterly PA tracking after quarter-end payrolls.', 'Payroll menu', 'Quarter close', 'Quarterly PA Tracker shows eligible employees and reasons.'],
           ['9', 'Payroll processor', 'Use Compensation Change for raises, changed allowances, or PTO plan/accrual changes.', 'Payroll menu', 'When approved', 'A new effective-dated comp row is created and the old row is closed.'],
@@ -4099,6 +4626,7 @@ function applyAttendanceFormatting_(ss) {
 
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.employees), 4, ['Active', 'Inactive', 'Resigned', 'Terminated']);
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.employees), HEADERS.employees.indexOf('Department') + 1, CONFIG.departments);
+  setValidation_(getSheet_(ss, CONFIG.attendanceTabs.employees), HEADERS.employees.indexOf('Portal Role') + 1, CONFIG.portalRoles);
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.events), 4, CONFIG.eventTypes);
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.events), 5, ['WEB_APP', 'MANUAL', 'IMPORTED']);
   setValidation_(getSheet_(ss, CONFIG.attendanceTabs.log), 16, CONFIG.statuses);
@@ -4508,10 +5036,21 @@ function getEmployeeTimesheetSummaryForPortal_(employeeCode, attendance) {
     if (!employee) return null;
     const rows = buildTimesheetReviewRows_(attendance, employee, countStart, countEnd, { computeFromSources: true });
     const counts = summarizeTimesheetRows_(rows);
+    const recentWorkingRows = getRecentWorkingTimesheetRows_(rows, 2);
+    const recentWorkingCounts = summarizeTimesheetRows_(recentWorkingRows);
+    const recentFlaggedDays = recentWorkingRows
+      .filter(row => timesheetRowHasOpenAttention_(row))
+      .map(row => row.dateLabel || displayDate_(row.date));
     return {
       openIssues: counts.openIssues,
       pendingRevisions: counts.pendingRevisions,
       total: counts.openIssues + counts.pendingRevisions,
+      recentWorkingOpenIssues: recentWorkingCounts.openIssues,
+      recentWorkingPendingRevisions: recentWorkingCounts.pendingRevisions,
+      recentWorkingTotal: recentWorkingCounts.openIssues + recentWorkingCounts.pendingRevisions,
+      recentWorkingDaysChecked: recentWorkingRows.length,
+      recentFlaggedDays,
+      recommendedView: recentWorkingCounts.openIssues + recentWorkingCounts.pendingRevisions > 0 ? 'recent' : 'currentPeriod',
       unavailable: false
     };
   } catch (error) {
@@ -4520,6 +5059,23 @@ function getEmployeeTimesheetSummaryForPortal_(employeeCode, attendance) {
       message: 'Timesheet review unavailable.'
     };
   }
+}
+
+function getRecentWorkingTimesheetRows_(rows, count) {
+  return (rows || [])
+    .filter(row => row && row.status !== 'Off (not scheduled)')
+    .sort((a, b) => {
+      const aDate = parseDateOrBlank_(a.date);
+      const bDate = parseDateOrBlank_(b.date);
+      return (bDate ? bDate.getTime() : 0) - (aDate ? aDate.getTime() : 0);
+    })
+    .slice(0, count || 2);
+}
+
+function timesheetRowHasOpenAttention_(row) {
+  if (!row) return false;
+  const issues = row.issues || [];
+  return issues.some(issue => !issue.isRevision) || toNumberOrZero_(row.pendingRevisionCount) > 0;
 }
 
 function getTimesheetReviewWindows_(payroll, today) {
@@ -4876,6 +5432,131 @@ function resolveWebAppEmployee_(identity, ss) {
   const code = normalizeCode_(identity.employeeCode);
   const pin = String(identity.pin);
   return employees.filter(row => normalizeCode_(row['Employee Code']) === code && String(row['Web App PIN'] || '') === pin)[0] || null;
+}
+
+function resolvePortalUser_(identity) {
+  identity = identity || {};
+  const attendance = requireAttendanceSpreadsheet_();
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
+  const employees = readObjects_(getSheet_(attendance, CONFIG.attendanceTabs.employees))
+    .filter(row => (row.Status || 'Active') === 'Active' || row.Status === '');
+  const activeUserEmail = (getActiveUserEmail_() || '').toLowerCase();
+
+  if (identity.loginMode === 'admin') {
+    const adminEmail = String(identity.adminEmail || identity.email || '').trim().toLowerCase();
+    const adminKey = String(identity.adminKey || '').trim();
+    if (!adminEmail || !adminKey) {
+      return { authenticated: false, activeUserEmail, message: 'Enter admin email and access key.' };
+    }
+    let keyValid = false;
+    try {
+      keyValid = validatePortalAdminAccessKey_(adminKey);
+    } catch (error) {
+      return { authenticated: false, activeUserEmail, message: error.message || String(error) };
+    }
+    if (!keyValid) {
+      return { authenticated: false, activeUserEmail, message: 'Admin access key is incorrect.' };
+    }
+    const adminRow = employees.filter(row => String(row.Email || '').toLowerCase() === adminEmail)[0];
+    if (!adminRow) {
+      return { authenticated: false, activeUserEmail, message: 'No active employee row matches that admin email.' };
+    }
+    const role = normalizePortalRole_(adminRow['Portal Role']);
+    if (!hasPortalPermission_(role, 'Attendance Admin')) {
+      return { authenticated: false, activeUserEmail, message: 'That email is not assigned an admin portal role.' };
+    }
+    return buildPortalUserFromEmployee_(adminRow, role, activeUserEmail || adminEmail, false);
+  }
+
+  if (activeUserEmail) {
+    const byEmail = employees.filter(row => String(row.Email || '').toLowerCase() === activeUserEmail)[0];
+    if (byEmail) return buildPortalUserFromEmployee_(byEmail, normalizePortalRole_(byEmail['Portal Role']), activeUserEmail, false);
+  }
+
+  if (identity && identity.employeeCode && identity.pin) {
+    const code = normalizeCode_(identity.employeeCode);
+    const pin = String(identity.pin);
+    const byPin = employees.filter(row => {
+      return normalizeCode_(row['Employee Code']) === code && String(row['Web App PIN'] || '') === pin;
+    })[0];
+    if (byPin) return buildPortalUserFromEmployee_(byPin, CONFIG.defaultPortalRole, activeUserEmail, true);
+  }
+
+  return {
+    authenticated: false,
+    activeUserEmail
+  };
+}
+
+function buildPortalUserFromEmployee_(employee, role, activeUserEmail, usedPinFallback) {
+  const normalizedRole = normalizePortalRole_(role);
+  const employeeCode = normalizeCode_(employee['Employee Code']);
+  return {
+    authenticated: true,
+    employeeCode,
+    displayName: employee['Display Name'] || employee['Full Name'] || employeeCode,
+    fullName: employee['Full Name'] || '',
+    email: employee.Email || '',
+    activeUserEmail: activeUserEmail || '',
+    role: normalizedRole,
+    usedPinFallback: Boolean(usedPinFallback),
+    permissions: {
+      employee: true,
+      attendanceAdmin: hasPortalPermission_(normalizedRole, 'Attendance Admin'),
+      payrollAdmin: hasPortalPermission_(normalizedRole, 'Payroll Admin')
+    }
+  };
+}
+
+function requirePortalRole_(requiredRole, identity) {
+  const portalUser = resolvePortalUser_(identity || PORTAL_AUTH_IDENTITY_CONTEXT_ || {});
+  if (!portalUser.authenticated || !hasPortalPermission_(portalUser.role, requiredRole)) {
+    throw new Error(`${requiredRole} access is required. Sign in with Admin Login using an authorized email and access key.`);
+  }
+  return portalUser;
+}
+
+function withPortalAuthContext_(identity, callback) {
+  const prior = PORTAL_AUTH_IDENTITY_CONTEXT_;
+  PORTAL_AUTH_IDENTITY_CONTEXT_ = identity || prior || {};
+  try {
+    return callback();
+  } finally {
+    PORTAL_AUTH_IDENTITY_CONTEXT_ = prior;
+  }
+}
+
+function hasPortalPermission_(actualRole, requiredRole) {
+  const hierarchy = {
+    Employee: 1,
+    'Attendance Admin': 2,
+    'Payroll Admin': 3
+  };
+  const actual = hierarchy[normalizePortalRole_(actualRole)] || 0;
+  const required = hierarchy[normalizePortalRole_(requiredRole)] || 1;
+  return actual >= required;
+}
+
+function validatePortalAdminAccessKey_(accessKey) {
+  const props = PropertiesService.getScriptProperties();
+  const salt = props.getProperty(CONFIG.portalAdminAccessKeySaltProp);
+  const expectedHash = props.getProperty(CONFIG.portalAdminAccessKeyHashProp);
+  if (!salt || !expectedHash) {
+    throw new Error('Portal admin access key has not been set. Use the Attendance or Payroll menu: Set Portal Admin Access Key.');
+  }
+  return hashPortalAdminAccessKey_(String(accessKey || '').trim(), salt) === expectedHash;
+}
+
+function hashPortalAdminAccessKey_(accessKey, salt) {
+  const digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    `${salt}|${accessKey}`,
+    Utilities.Charset.UTF_8
+  );
+  return digest.map(byte => {
+    const value = byte < 0 ? byte + 256 : byte;
+    return (`0${value.toString(16)}`).slice(-2);
+  }).join('');
 }
 
 function appendClockEvent_(entry) {
@@ -6104,6 +6785,92 @@ function readObjects_(sheet) {
     });
 }
 
+function readObjectsForDateWindow_(sheet, dateHeader, startDate, endDate) {
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  if (lastRow < 2 || lastColumn < 1) return [];
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  const dateIdx = headers.indexOf(dateHeader);
+  if (dateIdx === -1) return readObjects_(sheet);
+  const startTime = dateOnly_(startDate).getTime();
+  const endTime = dateOnly_(endDate).getTime();
+  const dateValues = sheet.getRange(2, dateIdx + 1, lastRow - 1, 1).getValues();
+  const rowNumbers = [];
+  dateValues.forEach((row, index) => {
+    const date = parseDateOrBlank_(row[0]);
+    if (!date) return;
+    const time = dateOnly_(date).getTime();
+    if (time >= startTime && time <= endTime) rowNumbers.push(index + 2);
+  });
+  return readObjectsByRowNumbers_(sheet, headers, rowNumbers);
+}
+
+function readObjectsByRowNumbers_(sheet, headers, rowNumbers) {
+  if (!rowNumbers.length) return [];
+  const objects = [];
+  const sorted = rowNumbers.slice().sort((a, b) => a - b);
+  let rangeStart = sorted[0];
+  let prior = sorted[0];
+  function flushRange(startRow, endRow) {
+    const values = sheet.getRange(startRow, 1, endRow - startRow + 1, headers.length).getValues();
+    values.forEach((row, rowIndex) => {
+      if (!row.some(cell => cell !== '' && cell !== null)) return;
+      const object = { _rowNumber: startRow + rowIndex };
+      headers.forEach((header, index) => {
+        object[header] = row[index];
+      });
+      objects.push(object);
+    });
+  }
+  for (let index = 1; index < sorted.length; index += 1) {
+    const rowNumber = sorted[index];
+    if (rowNumber === prior + 1) {
+      prior = rowNumber;
+      continue;
+    }
+    flushRange(rangeStart, prior);
+    rangeStart = rowNumber;
+    prior = rowNumber;
+  }
+  flushRange(rangeStart, prior);
+  return objects;
+}
+
+function readTailObjects_(sheet, count) {
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  const dataRows = Math.max(lastRow - 1, 0);
+  if (!dataRows || !lastColumn) return [];
+  const rowCount = Math.min(Math.max(Number(count) || 1, 1), dataRows);
+  const startRow = lastRow - rowCount + 1;
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  return sheet.getRange(startRow, 1, rowCount, lastColumn).getValues()
+    .filter(row => row.some(cell => cell !== '' && cell !== null))
+    .map((row, rowIndex) => {
+      const object = { _rowNumber: startRow + rowIndex };
+      headers.forEach((header, index) => {
+        object[header] = row[index];
+      });
+      return object;
+    });
+}
+
+function getSheetDataRowCount_(sheet) {
+  return Math.max(sheet.getLastRow() - 1, 0);
+}
+
+function countRowsContainingTextInColumn_(sheet, headerName, needle) {
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  if (lastRow < 2 || lastColumn < 1) return 0;
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  const columnIndex = headers.indexOf(headerName);
+  if (columnIndex === -1) return 0;
+  const query = String(needle || '').toLowerCase();
+  return sheet.getRange(2, columnIndex + 1, lastRow - 1, 1).getDisplayValues()
+    .reduce((count, row) => String(row[0] || '').toLowerCase().indexOf(query) !== -1 ? count + 1 : count, 0);
+}
+
 function appendRows_(sheet, rows) {
   if (!rows.length) return { startRow: 0, rowCount: 0 };
   const startRow = sheet.getLastRow() + 1;
@@ -6180,7 +6947,8 @@ function mapEmployeeRowForUi_(row) {
     displayName: row['Display Name'] || row['Full Name'] || row['Employee Code'],
     fullName: row['Full Name'] || '',
     status: row.Status || '',
-    department: row.Department || ''
+    department: row.Department || '',
+    portalRole: normalizePortalRole_(row['Portal Role'])
   };
 }
 
@@ -6221,6 +6989,18 @@ function buildScheduleRowFromPayload_(employeeCode, effectiveFrom, schedule) {
     lunchEnd: schedule.lunchEnd,
     byDay: schedule
   });
+}
+
+function getDefaultPortalSchedule_() {
+  const schedule = { lunchStart: '', lunchEnd: '' };
+  ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach(day => {
+    schedule[day] = {
+      enabled: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].indexOf(day) !== -1,
+      start: '10:00am',
+      end: '07:00pm'
+    };
+  });
+  return schedule;
 }
 
 function buildScheduleRow_(employeeCode, effectiveFrom, schedule) {
@@ -6271,6 +7051,11 @@ function normalizePtoPlanType_(value) {
 function normalizeDepartment_(value) {
   const text = String(value || '').trim();
   return CONFIG.departments.indexOf(text) !== -1 ? text : '';
+}
+
+function normalizePortalRole_(value) {
+  const text = String(value || '').trim();
+  return CONFIG.portalRoles.indexOf(text) !== -1 ? text : CONFIG.defaultPortalRole;
 }
 
 function blankable_(value) {

@@ -3,13 +3,15 @@
 **Project:** Internal payroll & attendance system, built in Google Sheets + Apps Script
 **Owner:** [Your name]
 **Status:** Draft v2
-**Last updated:** 2026-05-01
+**Last updated:** 2026-05-03
 
 > **Changes from v1:**
 > - Phase 1 attendance tracking is now an employee-facing self-service **web app** (Apps Script HtmlService) with real auto-timestamps. Assistants do NOT log attendance.
 > - Added §10 Employee Lifecycle (Add / Offboard / Reactivate) with full history preservation.
 > - Phase 1 now includes a basic Add Employee dialog. Phase 5 now includes the full Offboard + Reactivate flow with auto-Final-Payroll.
 > - Employee portal now includes Timesheet Review with current-period and recent views, plus append-only timestamp revision requests requiring payroll approval.
+> - The single web app URL is now role-based: employees see the clock/timesheet portal, Attendance Admins see attendance operations, and Payroll Admins see the full payroll dashboard.
+> - Admin dashboard workflows now include structured in-page forms for requests, employee setup, compensation changes, offboarding, reactivation, payroll actions, and paged source-data review.
 
 ---
 
@@ -24,7 +26,7 @@ We are moving **off Jibble entirely** and building a self-contained Google Sheet
 3. Manages PTO/UTO balances, makeup hours, attendance bonus eligibility, and KPI bonus approval.
 4. Produces a clean per-employee **scorecard** for attendance & performance reviews.
 5. Enforces **confidentiality** between assistants (who never see pay) and the payroll processor (who sees pay).
-6. Supports compensation changes (raises), employee onboarding/offboarding, and annual performance reviews via menu-driven dialogs.
+6. Supports compensation changes (raises), employee onboarding/offboarding, and annual performance reviews via the role-based web dashboard, with Sheets menus retained only as fallback.
 
 ### Success criteria
 
@@ -68,8 +70,8 @@ We are moving **off Jibble entirely** and building a self-contained Google Sheet
 
 ```
 ┌─────────────────────────────┐
-│   ATTENDANCE WEB APP        │  ◄── Employees clock in/out from phone/desktop
-│   (Apps Script HtmlService) │      Writes to Attendance Sheet via script auth
+│   ROLE-BASED WEB DASHBOARD  │  ◄── Employees clock; admins run workflows
+│   (Apps Script HtmlService) │      Writes via server-side Apps Script
 └──────────────┬──────────────┘
                │
                ▼
@@ -108,10 +110,10 @@ Google Sheets tab/range protections are bypassable by anyone with copy access or
 
 | Role | Web App | Attendance Sheet | Payroll Sheet |
 |---|---|---|---|
-| Employee | Use (their own clock events only) | No direct access | No access |
-| Assistant | View only (for monitoring, optional) | Edit | No access |
-| Payroll processor | View | Edit | Edit |
-| Manager / owner | View | Edit | Edit |
+| Employee | Own clock, requests, timesheet review | No direct access | No access |
+| Attendance Admin | Attendance dashboard only | Edit fallback | No access |
+| Payroll Admin | Full attendance + payroll dashboard | Edit fallback | Edit fallback |
+| Manager / owner | Full dashboard if assigned Payroll Admin | Edit fallback | Edit fallback |
 
 ---
 
@@ -150,7 +152,7 @@ Each phase is independently deployable. Do not start the next phase until the cu
 - Final payroll output with all components
 
 ### Phase 4 — PTO/UTO/makeup workflow
-- PTO/UTO/Non-PTO request submissions (employees submit via web app or sheet menu)
+- PTO/UTO/Non-PTO request submissions (employees and admins submit via web app)
 - PTO balance tracking per employee, supporting Fixed Annual and Accrued Monthly PTO structures
 - Makeup-hour request submissions
 - Approval workflow (manager approves before it counts in payroll calculations)
@@ -160,11 +162,11 @@ Each phase is independently deployable. Do not start the next phase until the cu
 - Employees can request timestamp revisions from the portal; pending requests never affect Attendance Log or payroll until payroll processor approval
 
 ### Phase 5 — Compensation changes + full employee lifecycle
-- Compensation Change dialog (Payroll Sheet menu only)
+- Compensation Change dashboard workflow (Payroll Admin only)
 - Effective dates default to the 1st of the next month
 - Retroactive raises automatically generate adjustment line items
-- **Offboard Employee dialog**: marks resignation/termination, sets end dates everywhere, triggers auto-Final-Payroll with Baseline-doc resignation rules (attendance bonus forfeited, KPI prorated if approved, benefits prorated, eligible Accrued Monthly PTO payout as a positive adjustment)
-- **Reactivate Employee dialog**: for rehires; creates new effective-dated rows rather than reopening old ones
+- **Offboard Employee workflow**: marks resignation/termination, sets end dates everywhere, triggers auto-Final-Payroll with Baseline-doc resignation rules (attendance bonus forfeited, KPI prorated if approved, benefits prorated, eligible Accrued Monthly PTO payout as a positive adjustment)
+- **Reactivate Employee workflow**: for rehires; creates new effective-dated rows rather than reopening old ones
 - Compensation Change Log + Employee Lifecycle Log (full audit trails, append-only)
 
 ### Phase 6 — Annual performance review
@@ -195,6 +197,7 @@ Each phase is independently deployable. Do not start the next phase until the cu
 | Web App PIN | string | Optional simple PIN for clock-in identification (see §6) |
 | Notes | string | |
 | Department | enum | `Operations`, `HR`, `Marketing`, `Advertising`; set during onboarding and left stable unless corrected by an admin |
+| Portal Role | enum | `Employee`, `Attendance Admin`, `Payroll Admin`; blank existing rows default to `Employee`. Admin roles require matching Google email; PIN fallback never grants admin access. |
 
 #### Tab: `Work Schedules` (structured, effective-dated)
 
@@ -330,11 +333,17 @@ Append-only audit of every onboarding, offboarding, and reactivation.
 
 ---
 
-## 6. Employee Clock-In Web App (Phase 1)
+## 6. Role-Based Web Dashboard (Phase 1+)
 
 ### 6.1 What it looks like
 
-A single web page, mobile-friendly, accessible at one URL the employees bookmark. The page has:
+A single web page, mobile-friendly, accessible at one URL. The same deployment routes users by `Portal Role` after login.
+
+- `Employee`: clock, request time off/makeup, review timesheet, request timestamp revisions.
+- `Attendance Admin`: attendance overview, pending requests, timesheet flags, manual clock events, Attendance Log rebuild, PTO balance refresh, scorecards, employee setup without compensation, and attendance source-data views.
+- `Payroll Admin`: everything Attendance Admin can do, plus KPI bonuses, bonuses/adjustments, payroll calculation, mark paid, compensation changes, offboarding/reactivation, payroll CSV export, and confidential payroll source-data views.
+
+The employee view has:
 
 ```
 ┌────────────────────────────────────────┐
@@ -373,9 +382,11 @@ A single web page, mobile-friendly, accessible at one URL the employees bookmark
 
 ### 6.2 Identification
 
-The recommended approach: each employee logs into the web app with their company Google account. Apps Script's `Session.getActiveUser().getEmail()` then reliably identifies them, and their `Email` in the Employees tab matches them to their `Employee Code`. No PINs, no passwords to manage.
+The recommended approach: each employee logs into the web app with their company Google account. Apps Script's `Session.getActiveUser().getEmail()` then identifies them, and their `Email` in the Employees tab matches them to their `Employee Code`.
 
 If an employee doesn't have a Google account, fall back to a simple PIN (set in the Employees tab) entered once per browser session.
+
+Admin access is stricter: Attendance Admin and Payroll Admin views are granted only when the admin login email matches an active Employees row with that `Portal Role` and the user enters the shared admin access key stored in Script Properties. A PIN session always resolves to `Employee`, even if the row's Portal Role is admin.
 
 ### 6.3 Button logic
 
@@ -405,7 +416,16 @@ The portal includes `Review Timesheet`:
 - Employees can request a timestamp revision with event type, original event if applicable, requested timestamp in `HH:MMam/pm`, and reason.
 - Payroll processor approval is required before any requested correction affects attendance or payroll.
 
-### 6.5 Edge cases
+### 6.5 Admin Dashboard
+
+- The dashboard is the primary workflow surface. Google Sheets remain available as source inspection and emergency fallback only.
+- Attendance Admins can view all attendance data and queues but cannot fetch compensation, payroll calculations, bonuses, or payroll output.
+- Payroll Admins can view and run all workflows, including confidential payroll and lifecycle operations.
+- Source-data views are paged and searchable so large tabs do not load all rows into the browser at once.
+- Routine loaders avoid PTO refreshes, full Attendance Log rebuilds, and formatting passes; explicit admin actions handle refresh/rebuild work.
+- Server-side role checks guard every dashboard API; hiding a UI tab is not treated as security.
+
+### 6.6 Edge cases
 
 - **Forgot to clock out:** Manager edits the day in Attendance Log, OR adds a `MANUAL` Clock Event with a Notes explanation. The Attendance Log rebuilds from Clock Events on every payroll calculation, so the correction flows through.
 - **Employee notices a wrong timestamp:** Employee submits a timestamp revision request in the portal. Payroll approves or denies it from Payroll > Approve Timestamp Revisions. If approved, the script appends a correction event and rebuilds the affected day.
@@ -413,11 +433,11 @@ The portal includes `Review Timesheet`:
 - **Web app down / outage:** Employees can submit times to the manager who manually adds `MANUAL` Clock Events.
 - **Multiple devices:** Same Google account works across devices. State is read fresh from Clock Events on every page load, so the buttons reflect reality regardless of device.
 
-### 6.6 Web app deployment
+### 6.7 Web app deployment
 
 - Deploy as "Execute as: Me (the script owner)" so the script can write to the Attendance Sheet regardless of which employee is using it
-- Access set to "Anyone with Google account" — employee identification is via their authenticated email
-- URL is shared with employees once; they bookmark it
+- Access set to "Anyone with Google account" when Google email identification is required for admin roles
+- URL is shared once; employee and admin views route from the same deployment
 
 ---
 

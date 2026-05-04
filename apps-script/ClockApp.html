@@ -40,6 +40,13 @@
         border: 1px solid var(--rule);
         padding: 36px 32px;
       }
+      body.admin-mode main {
+        width: min(1360px, 100%);
+      }
+      body.admin-mode .panel {
+        padding: 42px 44px;
+        overflow-x: hidden;
+      }
 
       /* Masthead */
       .eyebrow {
@@ -217,7 +224,7 @@
       select:focus,
       textarea:focus {
         outline: none;
-        border-bottom: 2px solid var(--ink-primary);
+        border-bottom: 2px solid var(--accent);
         padding-bottom: 0;
       }
       .utility-grid {
@@ -237,6 +244,44 @@
         color: var(--ink-muted);
         font-size: 12px;
         font-variant-numeric: tabular-nums;
+      }
+      .timesheet-alert {
+        margin: 18px 0 0;
+        padding: 16px 0 18px;
+        border-top: 2px solid var(--accent);
+        border-bottom: 1px solid var(--rule);
+      }
+      .timesheet-alert-label {
+        margin: 0 0 8px;
+        color: var(--ink-muted);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      .timesheet-alert-title {
+        margin: 0;
+        color: var(--ink-primary);
+        font-family: var(--serif);
+        font-size: 24px;
+        line-height: 1.1;
+      }
+      .timesheet-alert-copy {
+        margin: 10px 0 0;
+        color: var(--ink-body);
+        font-size: 13px;
+      }
+      .timesheet-alert button {
+        margin-top: 14px;
+        min-height: 42px;
+        border: 1px solid var(--ink-primary);
+        background: transparent;
+        color: var(--ink-primary);
+      }
+      .timesheet-alert button:hover:not(:disabled) {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: var(--bg-foundation);
       }
       .metric-strip {
         display: grid;
@@ -432,6 +477,285 @@
         margin: 14px 0 0;
       }
       .hidden { display: none; }
+
+      /* Admin dashboard */
+      .dashboard-shell {
+        display: grid;
+        gap: 28px;
+        max-width: 100%;
+        min-width: 0;
+      }
+      #adminContent {
+        max-width: 100%;
+        min-width: 0;
+      }
+      .dashboard-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 24px;
+        align-items: end;
+        border-bottom: 1px solid var(--rule);
+        padding-bottom: 22px;
+      }
+      .dashboard-meta {
+        color: var(--ink-muted);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+      }
+      .dashboard-logout {
+        width: auto;
+        min-height: 38px;
+        margin-top: 12px;
+        padding: 0 16px;
+        border: 1px solid var(--ink-primary);
+        background: transparent;
+        color: var(--ink-primary);
+        font-size: 11px;
+      }
+      .dashboard-logout:hover:not(:disabled) {
+        background: var(--ink-primary);
+        color: var(--bg-foundation);
+      }
+      .dashboard-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0;
+        border-top: 1px solid var(--rule);
+        border-bottom: 1px solid var(--rule);
+      }
+      .dashboard-nav button {
+        width: auto;
+        min-height: 46px;
+        border: 0;
+        border-right: 1px solid var(--rule);
+        background: transparent;
+        color: var(--ink-primary);
+      }
+      .dashboard-nav button:hover:not(:disabled) {
+        background: var(--accent);
+        color: var(--bg-foundation);
+      }
+      .dashboard-nav button.active {
+        background: var(--ink-primary);
+        color: var(--bg-foundation);
+      }
+      .dashboard-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        border-top: 1px solid var(--rule);
+        border-bottom: 1px solid var(--rule);
+      }
+      .dashboard-tile {
+        padding: 20px 18px;
+        border-right: 1px solid var(--rule);
+      }
+      .dashboard-tile:last-child {
+        border-right: 0;
+      }
+      .dashboard-tile .label,
+      .admin-list-label {
+        color: var(--ink-muted);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .dashboard-tile .value {
+        margin-top: 8px;
+        color: var(--ink-primary);
+        font-family: var(--serif);
+        font-size: 42px;
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+      }
+      .dashboard-section {
+        border-top: 1px solid var(--rule);
+        padding-top: 24px;
+        max-width: 100%;
+        min-width: 0;
+      }
+      .dashboard-section h2 {
+        margin: 0 0 18px;
+        color: var(--ink-primary);
+        font-family: var(--serif);
+        font-size: 30px;
+        font-weight: 400;
+        line-height: 1.05;
+      }
+      .admin-columns {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 28px;
+      }
+      .admin-list {
+        border-top: 1px solid var(--rule);
+      }
+      .admin-list-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 18px;
+        padding: 14px 0;
+        border-bottom: 1px solid var(--rule);
+      }
+      .admin-list-row strong {
+        color: var(--ink-primary);
+        font-weight: 500;
+      }
+      .admin-list-row small {
+        display: block;
+        margin-top: 4px;
+        color: var(--ink-muted);
+      }
+      .admin-actions-grid,
+      .data-selector-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        max-width: 100%;
+        min-width: 0;
+      }
+      .data-selector-grid {
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      }
+      .admin-actions-grid button,
+      .data-selector-grid button {
+        background: transparent;
+        color: var(--ink-primary);
+        border: 1px solid var(--ink-primary);
+      }
+      .admin-actions-grid button:hover:not(:disabled),
+      .data-selector-grid button:hover:not(:disabled) {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--bg-foundation);
+      }
+      .data-table-wrap {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        max-height: 560px;
+        overflow: auto;
+        border-top: 1px solid var(--rule);
+        border-bottom: 1px solid var(--rule);
+      }
+      .data-table {
+        width: max-content;
+        min-width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      .data-table th,
+      .data-table td {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--rule);
+        text-align: left;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+      .data-table th {
+        position: sticky;
+        top: 0;
+        background: var(--surface-inset);
+        color: var(--ink-muted);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .action-panel {
+        margin-top: 24px;
+        padding: 24px;
+        background: var(--surface-inset);
+        border-top: 2px solid var(--accent);
+      }
+      .action-panel h2 {
+        margin-top: 0;
+      }
+      .admin-form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0 22px;
+      }
+      .admin-workflow-section {
+        margin-top: 24px;
+        padding-top: 18px;
+        border-top: 1px solid var(--rule);
+      }
+      .admin-workflow-section h3 {
+        margin: 0 0 4px;
+        color: var(--ink-primary);
+        font-family: var(--serif);
+        font-size: 24px;
+        font-weight: 400;
+        line-height: 1.1;
+      }
+      .admin-schedule-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 12px;
+      }
+      .admin-schedule-table th,
+      .admin-schedule-table td {
+        padding: 10px 8px;
+        border-bottom: 1px solid var(--rule);
+        text-align: left;
+      }
+      .admin-schedule-table th {
+        background: var(--surface-card);
+        color: var(--ink-muted);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .data-controls {
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) 120px auto auto;
+        gap: 10px;
+        align-items: end;
+        margin: 18px 0 16px;
+      }
+      .data-controls .secondary {
+        margin-top: 0;
+      }
+      .admin-check-list {
+        max-height: 240px;
+        overflow: auto;
+        border-top: 1px solid var(--rule);
+        border-bottom: 1px solid var(--rule);
+        padding: 8px 0;
+      }
+      .admin-check-list label {
+        margin: 0;
+        padding: 8px 0;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+      }
+      @media (max-width: 820px) {
+        body.admin-mode .panel {
+          padding: 32px 24px;
+        }
+        .dashboard-head,
+        .admin-columns,
+        .admin-form-grid,
+        .data-controls,
+        .dashboard-grid,
+        .admin-actions-grid,
+        .data-selector-grid {
+          grid-template-columns: 1fr;
+        }
+        .dashboard-meta {
+          text-align: left;
+        }
+        .dashboard-logout {
+          width: 100%;
+        }
+        .dashboard-tile {
+          border-right: 0;
+          border-bottom: 1px solid var(--rule);
+        }
+      }
     </style>
   </head>
   <body>
@@ -446,6 +770,7 @@
     <script>
       const STORAGE_KEY = 'payrollClockIdentity';
       const PHRASE_STORAGE_KEY = 'payrollClockStatusPhrase';
+      const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
       const STATUS_PHRASES = {
         CLOCK_IN: [
           "There they are! Let's get it.",
@@ -494,6 +819,15 @@
       let latestReview = null;
       let latestReviewMode = 'currentPeriod';
       let activeView = 'clock';
+      let adminState = null;
+      let adminView = 'overview';
+      let activeDataTab = '';
+      let activeDataQuery = '';
+      let activeDataOffset = 0;
+      let activeDataLimit = 100;
+      let adminTimeOffBalances = {};
+      let adminTimeOffPreviewTimer = null;
+      let loginMode = 'employee';
 
       function getIdentity() {
         try {
@@ -512,7 +846,7 @@
       }
 
       function loadState() {
-        if (activeView !== 'clock') return;
+        if (activeView !== 'clock' && activeView !== 'admin') return;
         setStatus('Loading clock state...');
         google.script.run
           .withSuccessHandler(render)
@@ -521,19 +855,25 @@
       }
 
       function render(state) {
-        activeView = 'clock';
         latestState = state;
+        document.body.classList.remove('admin-mode');
         if (!state.authenticated) {
+          activeView = 'clock';
           renderIdentityForm(state);
           return;
         }
+        if (state.mode === 'admin') {
+          renderAdminPortal(state);
+          return;
+        }
 
+        activeView = 'clock';
         const buttons = state.buttons.map(button => (
           `<button type="button" ${button.enabled ? '' : 'disabled'} onclick="submitEvent('${button.type}')">${escapeHtml(button.label)}</button>`
         )).join('');
         const summary = state.todaySummary.map(item => `<li>${escapeHtml(item)}</li>`).join('');
         const balance = renderBalanceLine(state.ptoBalance);
-        const timesheetSummary = renderTimesheetSummaryLine(state.timesheetSummary);
+        const timesheetNotice = renderTimesheetDashboardNotice(state.timesheetSummary);
         const phrase = pickStatusPhrase(state);
 
         document.getElementById('app').innerHTML = `
@@ -545,13 +885,13 @@
           <div class="state">${escapeHtml(state.currentState)}</div>
           ${phrase ? `<p class="status-phrase">${escapeHtml(phrase)}</p>` : ''}
           <div class="buttons">${buttons}</div>
+          ${timesheetNotice}
           <div class="utility-grid">
             <button type="button" class="secondary" onclick="showTimeOffForm()">Request Time Off</button>
             <button type="button" class="secondary" onclick="showMakeupForm()">Makeup Hours</button>
             <button type="button" class="secondary" onclick="showTimesheetReview('currentPeriod')">Review Timesheet</button>
           </div>
           ${balance}
-          ${timesheetSummary}
           <hr class="rule">
           <p class="summary-heading">Today so far</p>
           <ul class="summary">${summary}</ul>
@@ -562,14 +902,29 @@
 
       function renderIdentityForm(state) {
         activeView = 'clock';
+        document.body.classList.remove('admin-mode');
+        const storedIdentity = getIdentity();
+        if (storedIdentity.loginMode === 'admin') loginMode = 'admin';
+        const isAdmin = loginMode === 'admin';
         document.getElementById('app').innerHTML = `
           <p class="eyebrow">Time &amp; Attendance</p>
-          <h1>Employee Clock-In</h1>
-          <p class="intro">${escapeHtml(state.message || 'Enter your employee code and PIN to continue.')}</p>
-          <label for="employeeCode">Employee Code</label>
-          <input id="employeeCode" autocomplete="username" inputmode="text">
-          <label for="pin">Web App PIN</label>
-          <input id="pin" type="password" autocomplete="current-password" inputmode="numeric">
+          <h1>${isAdmin ? 'Admin Dashboard' : 'Employee Clock-In'}</h1>
+          <p class="intro">${escapeHtml(state.message || (isAdmin ? 'Enter your admin email and access key.' : 'Enter your employee code and PIN to continue.'))}</p>
+          <div class="segmented">
+            <button type="button" class="${isAdmin ? '' : 'active'}" onclick="switchLoginMode('employee')">Employee</button>
+            <button type="button" class="${isAdmin ? 'active' : ''}" onclick="switchLoginMode('admin')">Admin</button>
+          </div>
+          ${isAdmin ? `
+            <label for="adminEmail">Admin Email</label>
+            <input id="adminEmail" autocomplete="username" inputmode="email">
+            <label for="adminKey">Admin Access Key</label>
+            <input id="adminKey" type="password" autocomplete="current-password">
+          ` : `
+            <label for="employeeCode">Employee Code</label>
+            <input id="employeeCode" autocomplete="username" inputmode="text">
+            <label for="pin">Web App PIN</label>
+            <input id="pin" type="password" autocomplete="current-password" inputmode="numeric">
+          `}
           <div class="buttons">
             <button type="button" onclick="saveIdentity()">Continue</button>
           </div>
@@ -577,15 +932,1126 @@
         `;
       }
 
+      function switchLoginMode(mode) {
+        loginMode = mode === 'admin' ? 'admin' : 'employee';
+        clearIdentity();
+        renderIdentityForm({
+          authenticated: false,
+          message: loginMode === 'admin'
+            ? 'Enter your admin email and access key.'
+            : 'Enter your employee code and PIN to continue.'
+        });
+      }
+
       function saveIdentity() {
-        const employeeCode = document.getElementById('employeeCode').value.trim();
-        const pin = document.getElementById('pin').value;
-        if (!employeeCode || !pin) {
-          setStatus('Enter both employee code and PIN.', true);
+        if (loginMode === 'admin') {
+          const adminEmail = document.getElementById('adminEmail').value.trim();
+          const adminKey = document.getElementById('adminKey').value;
+          if (!adminEmail || !adminKey) {
+            setStatus('Enter admin email and access key.', true);
+            return;
+          }
+          setIdentity({ loginMode: 'admin', adminEmail, adminKey });
+        } else {
+          const employeeCode = document.getElementById('employeeCode').value.trim();
+          const pin = document.getElementById('pin').value;
+          if (!employeeCode || !pin) {
+            setStatus('Enter both employee code and PIN.', true);
+            return;
+          }
+          setIdentity({ loginMode: 'employee', employeeCode, pin });
+        }
+        loadState();
+      }
+
+      function renderAdminPortal(state) {
+        activeView = 'admin';
+        adminState = state;
+        document.body.classList.add('admin-mode');
+        const user = state.portalUser || {};
+        const dashboard = state.dashboard || {};
+        const period = dashboard.currentPeriod || {};
+        document.getElementById('app').innerHTML = `
+          <div class="dashboard-shell">
+            <header class="dashboard-head">
+              <div>
+                <p class="eyebrow">${escapeHtml(user.role || 'Dashboard')}</p>
+                <h1>${escapeHtml(user.displayName || 'Admin Dashboard')}</h1>
+              </div>
+              <div class="dashboard-meta">
+                <div>${escapeHtml(user.activeUserEmail || user.email || '')}</div>
+                <div>${escapeHtml(period.label || '')}</div>
+                <div>${escapeHtml(dashboard.generatedAt || '')}</div>
+                <button type="button" class="dashboard-logout" onclick="signOut()">Sign out</button>
+              </div>
+            </header>
+            ${renderAdminNav(user.role)}
+            <div id="adminContent">${renderAdminView()}</div>
+            <p id="status" class="status"></p>
+          </div>
+        `;
+      }
+
+      function renderAdminNav(role) {
+        const tabs = [
+          { key: 'overview', label: 'Overview', role: 'Attendance Admin' },
+          { key: 'attendance', label: 'Attendance', role: 'Attendance Admin' },
+          { key: 'requests', label: 'Requests', role: 'Attendance Admin' },
+          { key: 'employees', label: 'Employees', role: 'Attendance Admin' },
+          { key: 'payroll', label: 'Payroll', role: 'Payroll Admin' },
+          { key: 'lifecycle', label: 'Lifecycle', role: 'Payroll Admin' },
+          { key: 'data', label: 'Data', role: 'Attendance Admin' }
+        ].filter(tab => adminHasRole(role, tab.role));
+        if (!tabs.some(tab => tab.key === adminView)) adminView = 'overview';
+        return `<nav class="dashboard-nav">${tabs.map(tab => (
+          `<button type="button" class="${adminView === tab.key ? 'active' : ''}" onclick="setAdminView('${tab.key}')">${escapeHtml(tab.label)}</button>`
+        )).join('')}</nav>`;
+      }
+
+      function setAdminView(view) {
+        adminView = view;
+        const content = document.getElementById('adminContent');
+        if (content) content.innerHTML = renderAdminView();
+        const shell = document.getElementById('app');
+        if (shell && adminState) {
+          const nav = shell.querySelector('.dashboard-nav');
+          if (nav) nav.outerHTML = renderAdminNav((adminState.portalUser || {}).role);
+        }
+        if (view === 'data') renderDataView();
+      }
+
+      function renderAdminView() {
+        const dashboard = (adminState && adminState.dashboard) || {};
+        if (adminView === 'overview') return renderAdminOverview(dashboard);
+        if (adminView === 'attendance') return renderAdminActionsView('Attendance', ['Manual Clock Entry', 'Edit Attendance Status', 'Rebuild Attendance Log', 'Refresh PTO Balances', 'Scorecards']);
+        if (adminView === 'requests') return renderAdminRequestsView(dashboard);
+        if (adminView === 'employees') return renderAdminActionsView('Employees', ['Add Employee']);
+        if (adminView === 'payroll') return renderAdminPayrollView(dashboard);
+        if (adminView === 'lifecycle') return renderAdminActionsView('Lifecycle', ['Compensation Change', 'Offboard Employee', 'Reactivate Employee']);
+        if (adminView === 'data') return renderAdminDataShell(dashboard);
+        return renderAdminOverview(dashboard);
+      }
+
+      function renderAdminOverview(dashboard) {
+        const metrics = (dashboard.metrics || []).concat((dashboard.payroll && dashboard.payroll.metrics) || []);
+        return `
+          <section class="dashboard-section">
+            <h2>Operations Overview</h2>
+            ${renderDashboardMetrics(metrics)}
+          </section>
+          <section class="dashboard-section">
+            <div class="admin-columns">
+              ${renderQueueBlock('Time Off / Makeup', [].concat(dashboard.queues && dashboard.queues.timeOff || [], dashboard.queues && dashboard.queues.makeup || []))}
+              ${renderQueueBlock('Timesheet Flags', dashboard.queues && dashboard.queues.timesheetFlags || [])}
+            </div>
+          </section>
+        `;
+      }
+
+      function renderAdminRequestsView(dashboard) {
+        return `
+          <section class="dashboard-section">
+            <h2>Request Queues</h2>
+            <div class="admin-actions-grid">
+              <button type="button" onclick="showAdminAction('timeOffRequest')">Submit Time Off</button>
+              <button type="button" onclick="showAdminAction('makeupRequest')">Submit Makeup Hours</button>
+              <button type="button" onclick="showAdminAction('pendingRequests')">Approve Time Off / Makeup</button>
+              ${adminHasRole((adminState.portalUser || {}).role, 'Payroll Admin') ? `<button type="button" onclick="showAdminAction('timestampRevisions')">Approve Timestamp Revisions</button>` : ''}
+            </div>
+          </section>
+          <section class="dashboard-section">
+            <div class="admin-columns">
+              ${renderQueueBlock('Pending Time Off', dashboard.queues && dashboard.queues.timeOff || [])}
+              ${renderQueueBlock('Pending Makeup', dashboard.queues && dashboard.queues.makeup || [])}
+              ${renderQueueBlock('Timestamp Revisions', dashboard.queues && dashboard.queues.timestampRevisions || [])}
+              ${renderQueueBlock('Timesheet Flags', dashboard.queues && dashboard.queues.timesheetFlags || [])}
+            </div>
+          </section>
+          <div id="adminActionHost"></div>
+        `;
+      }
+
+      function renderAdminPayrollView(dashboard) {
+        const payroll = dashboard.payroll || {};
+        return `
+          <section class="dashboard-section">
+            <h2>Payroll Desk</h2>
+            ${renderDashboardMetrics(payroll.metrics || [])}
+            <div class="admin-actions-grid" style="margin-top: 20px;">
+              <button type="button" onclick="showAdminAction('calculatePayPeriod')">Calculate Pay Period</button>
+              <button type="button" onclick="showAdminAction('kpiDialog')">KPI Bonuses</button>
+              <button type="button" onclick="showAdminAction('bonusAdjustment')">Bonus / Adjustment</button>
+              <button type="button" onclick="runSimpleAdminAction('refreshQuarterlyPaTracker')">Refresh PA Tracker</button>
+              <button type="button" onclick="showMarkPaidForm()">Mark Paid</button>
+              <button type="button" onclick="runSimpleAdminAction('exportPayrollOutputCsv')">Export Payroll CSV</button>
+            </div>
+          </section>
+          <section class="dashboard-section">
+            <div class="admin-columns">
+              ${renderQueueBlock('Recent Payroll Output', payroll.recentOutput || [])}
+              ${renderQueueBlock('Recent Calculations', payroll.recentCalculations || [])}
+            </div>
+          </section>
+          <div id="adminActionHost"></div>
+        `;
+      }
+
+      function renderAdminActionsView(title, actionLabels) {
+        const actions = ((adminState.dashboard || {}).actions || []).filter(action => actionLabels.indexOf(action.label) !== -1);
+        return `
+          <section class="dashboard-section">
+            <h2>${escapeHtml(title)}</h2>
+            <div class="admin-actions-grid">
+              ${actions.map(action => `<button type="button" onclick="${adminActionOnclick(action.key)}">${escapeHtml(action.label)}</button>`).join('') || '<p class="empty">No actions available for this role.</p>'}
+            </div>
+          </section>
+          <div id="adminActionHost"></div>
+        `;
+      }
+
+      function renderAdminDataShell(dashboard) {
+        const tabs = dashboard.dataTabs || [];
+        return `
+          <section class="dashboard-section">
+            <h2>Source Data</h2>
+            <p class="request-note">Sheets remain the source of record. Use these views for primary dashboard review; open the Sheet only as fallback.</p>
+            <div class="data-selector-grid">
+              ${tabs.map(tab => `<button type="button" onclick="loadPortalTable('${escapeAttr(tab.key)}')">${escapeHtml(tab.title)}</button>`).join('')}
+            </div>
+          </section>
+          <section id="dataTableHost" class="dashboard-section"><p class="empty">Select a data view.</p></section>
+        `;
+      }
+
+      function renderDashboardMetrics(metrics) {
+        return `<div class="dashboard-grid">${(metrics || []).map(metric => `
+          <div class="dashboard-tile">
+            <div class="label">${escapeHtml(metric.label)}</div>
+            <div class="value">${escapeHtml(metric.value)}</div>
+          </div>
+        `).join('')}</div>`;
+      }
+
+      function renderQueueBlock(title, rows) {
+        const body = (rows || []).length
+          ? rows.map(row => renderAdminListRow(row)).join('')
+          : '<p class="empty">No current items.</p>';
+        return `
+          <div>
+            <p class="admin-list-label">${escapeHtml(title)}</p>
+            <div class="admin-list">${body}</div>
+          </div>
+        `;
+      }
+
+      function renderAdminListRow(row) {
+        const primary = row.employee || row.employeeCode || row.periodId || row.requestId || row.date || 'Item';
+        const secondary = [
+          row.requestId,
+          row.type || row.eventLabel || row.status,
+          row.dateRange || row.workDate || row.date,
+          row.hours !== undefined && row.hours !== '' ? `${row.hours}h` : '',
+          row.notes || row.reason
+        ].filter(Boolean).join(' | ');
+        const right = row.lateMinutes ? `${row.lateMinutes}m late` : (row.workedHours !== undefined && row.workedHours !== '' ? `${row.workedHours}h` : '');
+        return `
+          <div class="admin-list-row">
+            <div><strong>${escapeHtml(primary)}</strong><small>${escapeHtml(secondary)}</small></div>
+            <div>${escapeHtml(right)}</div>
+          </div>
+        `;
+      }
+
+      function adminActionOnclick(key) {
+        if (key === 'rebuildAttendanceLog') return 'showRebuildAttendanceForm()';
+        if (key === 'refreshPtoBalances' || key === 'saveScorecard') return `runSimpleAdminAction('${key}')`;
+        if (key === 'addEmployee') return "showAdminAction('addEmployeeDefaults')";
+        return `showAdminAction('${key}')`;
+      }
+
+      function adminHasRole(actualRole, requiredRole) {
+        const rank = { Employee: 1, 'Attendance Admin': 2, 'Payroll Admin': 3 };
+        return (rank[actualRole] || 0) >= (rank[requiredRole] || 1);
+      }
+
+      function showAdminAction(action, payload) {
+        const host = document.getElementById('adminActionHost') || document.getElementById('adminContent');
+        if (host) host.innerHTML = '<div class="action-panel"><p class="loading">Loading action</p></div>';
+        google.script.run
+          .withSuccessHandler(data => renderAdminAction(action, data || {}))
+          .withFailureHandler(showError)
+          .getPortalActionData(action, payload || {}, getIdentity());
+      }
+
+      function renderAdminAction(action, data) {
+        const host = document.getElementById('adminActionHost') || document.getElementById('adminContent');
+        if (!host) return;
+        if (action === 'manualClock') host.innerHTML = renderManualClockAction(data);
+        else if (action === 'editAttendance') host.innerHTML = renderEditAttendanceAction(data);
+        else if (action === 'timeOffRequest') host.innerHTML = renderAdminTimeOffRequestAction(data);
+        else if (action === 'makeupRequest') host.innerHTML = renderAdminMakeupRequestAction(data);
+        else if (action === 'pendingRequests') host.innerHTML = renderPendingRequestsAction(data);
+        else if (action === 'timestampRevisions') host.innerHTML = renderTimestampRevisionsAction(data);
+        else if (action === 'calculatePayPeriod') host.innerHTML = renderCalculatePayrollAction(data);
+        else if (action === 'kpiDialog') host.innerHTML = renderKpiPeriodPicker(data);
+        else if (action === 'kpiPeriod') host.innerHTML = renderKpiBonusAction(data);
+        else if (action === 'bonusAdjustment') host.innerHTML = renderBonusAdjustmentAction(data);
+        else if (action === 'compensationChange') host.innerHTML = renderCompensationChangeAction(data);
+        else if (action === 'offboard') host.innerHTML = renderOffboardAction(data);
+        else if (action === 'reactivate') host.innerHTML = renderReactivateAction(data);
+        else if (action === 'addEmployeeDefaults') host.innerHTML = renderAddEmployeeAction(data);
+        else if (action === 'scorecard') host.innerHTML = renderScorecardAction(data);
+        else host.innerHTML = `<div class="action-panel"><p class="empty">No form configured for ${escapeHtml(action)}.</p></div>`;
+        if (action === 'timeOffRequest') {
+          toggleAdminTimeOffTimes();
+          renderAdminTimeOffBalance();
+          previewAdminTimeOff();
+        }
+        host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+
+      function renderManualClockAction(data) {
+        const employeeOptions = optionList(data.employees || [], 'employeeCode', 'displayName');
+        const eventOptions = (data.eventTypes || []).map(item => `<option value="${escapeAttr(item.type)}">${escapeHtml(item.label)}</option>`).join('');
+        return `
+          <div class="action-panel">
+            <h2>Manual Clock Entry</h2>
+            <div class="admin-form-grid">
+              <label>Employee<select id="adminEmployee">${employeeOptions}</select></label>
+              <label>Event Type<select id="adminEventType">${eventOptions}</select></label>
+              <label>Timestamp<input id="adminTimestamp" type="datetime-local" value="${escapeAttr(data.nowLocal || '')}"></label>
+              <label>Notes<input id="adminNotes"></label>
+            </div>
+            ${adminActionButtons("runAdminAction('addManualClockEvent', collectManualClockPayload())")}
+          </div>
+        `;
+      }
+
+      function renderEditAttendanceAction(data) {
+        return `
+          <div class="action-panel">
+            <h2>Edit Attendance Status</h2>
+            <div class="admin-form-grid">
+              <label>Employee<select id="adminEmployee">${optionList(data.employees || [], 'employeeCode', 'displayName')}</select></label>
+              <label>Date<input id="adminDate" type="date" value="${escapeAttr(data.today || '')}"></label>
+              <label>Status<select id="adminStatus">${(data.statuses || []).map(status => `<option>${escapeHtml(status)}</option>`).join('')}</select></label>
+            </div>
+            ${adminActionButtons("runAdminAction('editAttendanceLogEntry', { employeeCode: value('adminEmployee'), date: value('adminDate'), status: value('adminStatus') })")}
+          </div>
+        `;
+      }
+
+      function renderAdminTimeOffRequestAction(data) {
+        adminTimeOffBalances = data.balances || {};
+        return `
+          <div class="action-panel">
+            <h2>Submit Time Off</h2>
+            <div class="admin-form-grid">
+              <label>Employee<select id="adminTimeOffEmployee" onchange="renderAdminTimeOffBalance()">${optionList(data.employees || [], 'employeeCode', 'displayName')}</select></label>
+              <label>Type<select id="adminTimeOffType" onchange="previewAdminTimeOff()">${(data.types || []).map(type => `<option value="${escapeAttr(type)}">${escapeHtml(type)}</option>`).join('')}</select></label>
+              <label><input id="adminTimeOffFullDay" type="checkbox" checked onchange="toggleAdminTimeOffTimes(); previewAdminTimeOff()"> Full Day</label>
+              <label>Start Date<input id="adminTimeOffStartDate" type="date" value="${escapeAttr(data.today || '')}" onchange="previewAdminTimeOff()"></label>
+              <label>End Date<input id="adminTimeOffEndDate" type="date" value="${escapeAttr(data.today || '')}" onchange="previewAdminTimeOff()"></label>
+              <label class="admin-timeoff-time-field">Start Time<input id="adminTimeOffStartTime" placeholder="10:00am" oninput="previewAdminTimeOff()"></label>
+              <label class="admin-timeoff-time-field">End Time<input id="adminTimeOffEndTime" placeholder="02:00pm" oninput="previewAdminTimeOff()"></label>
+            </div>
+            <div class="metric-strip two">
+              <div class="metric"><div class="label">Requested Hours</div><div id="adminTimeOffHours" class="value">Blank</div></div>
+              <div class="metric"><div class="label">Balance</div><div id="adminTimeOffBalance" class="value">Blank</div></div>
+            </div>
+            <p id="adminTimeOffNote" class="request-note"></p>
+            <label>Reason<textarea id="adminTimeOffReason"></textarea></label>
+            ${adminActionButtons("runAdminAction('submitTimeOffRequest', collectAdminTimeOffRequestPayload())", 'Submit Request')}
+          </div>
+        `;
+      }
+
+      function renderAdminMakeupRequestAction(data) {
+        return `
+          <div class="action-panel">
+            <h2>Submit Makeup Hours</h2>
+            <p class="request-note">Approved makeup hours offset short-hour deductions in payroll. They do not override an absent day or an incomplete clock-out.</p>
+            <div class="admin-form-grid">
+              <label>Employee<select id="adminMakeupEmployee">${optionList(data.employees || [], 'employeeCode', 'displayName')}</select></label>
+              <label>Date<input id="adminMakeupDate" type="date" value="${escapeAttr(data.today || '')}"></label>
+              <label>Hours Requested<input id="adminMakeupHours" type="number" min="0.25" step="0.25"></label>
+            </div>
+            <label>Reason<textarea id="adminMakeupReason"></textarea></label>
+            ${adminActionButtons("runAdminAction('submitMakeupHourRequest', collectAdminMakeupRequestPayload())", 'Submit Request')}
+          </div>
+        `;
+      }
+
+      function renderPendingRequestsAction(data) {
+        const rows = []
+          .concat((data.timeOffRequests || []).map(row => Object.assign({ kind: 'timeOff' }, row)))
+          .concat((data.makeupRequests || []).map(row => Object.assign({ kind: 'makeup' }, row)));
+        return `
+          <div class="action-panel">
+            <h2>Approve Time Off / Makeup</h2>
+            ${rows.length ? rows.map(renderRequestDecisionRow).join('') : '<p class="empty">No pending requests.</p>'}
+            ${rows.length ? adminActionButtons("runAdminAction('processPendingRequests', collectRequestDecisions())") : ''}
+          </div>
+        `;
+      }
+
+      function renderRequestDecisionRow(row) {
+        const dateText = row.startDate || row.workDate || row.date || '';
+        const endText = row.endDate && row.endDate !== dateText ? ` - ${row.endDate}` : '';
+        const hourText = row.units !== undefined && row.units !== '' ? row.units : (row.hours || '');
+        return `
+          <div class="admin-list-row">
+            <div>
+              <strong>${escapeHtml(row.employee || row.employeeCode)} - ${escapeHtml(row.type || row.kind)}</strong>
+              <small>${escapeHtml(row.requestId)} | ${escapeHtml(dateText)}${escapeHtml(endText)} | ${escapeHtml(hourText)}h | ${escapeHtml(row.reason || '')}</small>
+            </div>
+            <div>
+              <select data-kind="${escapeAttr(row.kind)}" data-request-id="${escapeAttr(row.requestId)}" class="request-decision">
+                <option>Keep</option><option>Approved</option><option>Denied</option>
+              </select>
+              <input data-request-id="${escapeAttr(row.requestId)}" class="request-notes" placeholder="Notes">
+            </div>
+          </div>
+        `;
+      }
+
+      function renderTimestampRevisionsAction(data) {
+        const rows = data.requests || [];
+        return `
+          <div class="action-panel">
+            <h2>Timestamp Revisions</h2>
+            ${rows.length ? rows.map(renderTimestampDecisionRow).join('') : '<p class="empty">No pending timestamp revisions.</p>'}
+            ${rows.length ? adminActionButtons("runAdminAction('processTimestampRevisions', collectTimestampRevisionDecisions())") : ''}
+          </div>
+        `;
+      }
+
+      function renderTimestampDecisionRow(row) {
+        return `
+          <div class="admin-list-row">
+            <div>
+              <strong>${escapeHtml(row.employee)} - ${escapeHtml(row.eventLabel)}</strong>
+              <small>${escapeHtml(row.requestId)} | ${escapeHtml(row.workDate)} | ${escapeHtml(row.originalTimestamp || 'missing')} -> ${escapeHtml(row.requestedTimestamp)} | ${escapeHtml(row.reason || '')}</small>
+            </div>
+            <div>
+              <select data-request-id="${escapeAttr(row.requestId)}" class="timestamp-decision">
+                <option>Keep</option><option>Approved</option><option>Denied</option>
+              </select>
+              <input data-request-id="${escapeAttr(row.requestId)}" class="timestamp-notes" placeholder="Notes">
+            </div>
+          </div>
+        `;
+      }
+
+      function renderCalculatePayrollAction(data) {
+        const periodOptions = (data.periods || []).map(period => `<option value="${escapeAttr(period.periodId)}" ${period.periodId === data.defaultPeriodId ? 'selected' : ''}>${escapeHtml(period.periodId)} - ${escapeHtml(period.status)}</option>`).join('');
+        return `
+          <div class="action-panel">
+            <h2>Calculate Pay Period</h2>
+            <label>Pay Period<select id="adminPeriod" onchange="loadPayrollEmployeesForPeriod()">${periodOptions}</select></label>
+            <div id="payrollEmployeeList">${renderPayrollEmployeeCheckboxes(data.employees || [])}</div>
+            ${adminActionButtons("runAdminAction('calculatePayPeriod', collectCalculatePayrollPayload())")}
+          </div>
+        `;
+      }
+
+      function renderPayrollEmployeeCheckboxes(employees) {
+        return `
+          <p class="request-note">Leave all unchecked to calculate everyone in the period.</p>
+          <div class="admin-check-list">
+            ${(employees || []).map(employee => `<label><input type="checkbox" class="payroll-employee" value="${escapeAttr(employee.employeeCode)}"> ${escapeHtml(employee.displayName)} (${escapeHtml(employee.employeeCode)})</label>`).join('') || '<p class="empty">No employees found for this period.</p>'}
+          </div>
+        `;
+      }
+
+      function loadPayrollEmployeesForPeriod() {
+        const periodId = value('adminPeriod');
+        const host = document.getElementById('payrollEmployeeList');
+        if (host) host.innerHTML = '<p class="loading">Loading employees</p>';
+        google.script.run
+          .withSuccessHandler(employees => { if (host) host.innerHTML = renderPayrollEmployeeCheckboxes(employees || []); })
+          .withFailureHandler(showError)
+          .getPortalActionData('calculatePayPeriodEmployees', { periodId }, getIdentity());
+      }
+
+      function renderKpiPeriodPicker(data) {
+        return `
+          <div class="action-panel">
+            <h2>KPI Bonuses</h2>
+            <label>Pay Period<select id="kpiPeriod">${(data.periods || []).map(period => `<option value="${escapeAttr(period.periodId)}" ${period.periodId === data.defaultPeriodId ? 'selected' : ''}>${escapeHtml(period.periodId)} - ${escapeHtml(period.type)}</option>`).join('')}</select></label>
+            ${adminActionButtons("showAdminAction('kpiPeriod', { periodId: value('kpiPeriod') })", 'Load KPI Entries')}
+          </div>
+        `;
+      }
+
+      function renderKpiBonusAction(data) {
+        return `
+          <div class="action-panel">
+            <h2>KPI Bonuses</h2>
+            <p class="request-note">${escapeHtml(data.periodId || '')} | ${escapeHtml(data.periodType || '')}</p>
+            ${(data.employees || []).map(row => `
+              <div class="admin-list-row kpi-row" data-employee="${escapeAttr(row.employeeCode)}">
+                <div><strong>${escapeHtml(row.displayName)}</strong><small>Max ${escapeHtml(row.kpiMax || 'blank')}</small></div>
+                <div><input class="kpi-percent" placeholder="Approved %" value="${escapeAttr(row.approvedPercent || '')}"><input class="kpi-notes" placeholder="Notes" value="${escapeAttr(row.notes || '')}"></div>
+              </div>
+            `).join('') || '<p class="empty">No employees for this period.</p>'}
+            ${adminActionButtons(`runAdminAction('saveKpiBonuses', collectKpiPayload('${escapeAttr(data.periodId || '')}'))`)}
+          </div>
+        `;
+      }
+
+      function renderBonusAdjustmentAction(data) {
+        return `
+          <div class="action-panel">
+            <h2>Bonus / Adjustment</h2>
+            <div class="admin-form-grid">
+              <label>Entry Mode<select id="bonusMode" onchange="showAdminAction('bonusAdjustment', { entryMode: value('bonusMode') })"><option value="additional">Additional Bonus</option><option value="adjustment" ${data.entryMode === 'adjustment' ? 'selected' : ''}>Adjustment</option></select></label>
+              <label>Pay Period<select id="bonusPeriod">${(data.periods || []).map(period => `<option value="${escapeAttr(period.periodId)}" ${period.periodId === data.defaultPeriodId ? 'selected' : ''}>${escapeHtml(period.periodId)}</option>`).join('')}</select></label>
+              <label>Employee<select id="bonusEmployee">${optionList(data.employees || [], 'employeeCode', 'displayName')}</select></label>
+              <label>Type<select id="bonusType"><option>Additional</option><option>Positive Adj</option><option>Negative Adj</option></select></label>
+              <label>Amount<input id="bonusAmount" type="number" min="0" step="0.01"></label>
+              <label>Description<input id="bonusDescription"></label>
+            </div>
+            ${adminActionButtons("runAdminAction('addBonusAdjustment', collectBonusPayload())")}
+          </div>
+        `;
+      }
+
+      function renderCompensationChangeAction(data) {
+        const periods = data.periods || [];
+        return `
+          <div class="action-panel">
+            <h2>Compensation Change</h2>
+            <div class="admin-form-grid">
+              <label>Employee<select id="compEmployee">${optionList(data.employees || [], 'employeeCode', 'displayName')}</select></label>
+              <label>Effective From<input id="compEffectiveFrom" type="date" value="${escapeAttr(data.defaultEffectiveFrom || '')}"></label>
+              <label>Reason<input id="compReason"></label>
+              <label>Retroactive?<select id="compRetroactive" onchange="toggleCompRetroFields()"><option value="false">No</option><option value="true">Yes</option></select></label>
+              <label class="comp-retro-field hidden">Retro Start<input id="compRetroStart" type="date"></label>
+              <label class="comp-retro-field hidden">Retro End<input id="compRetroEnd" type="date"></label>
+              <label class="comp-retro-field hidden">Adjustment Period<select id="compAdjustmentPeriod">${periods.map(period => `<option value="${escapeAttr(period.periodId)}" ${period.periodId === data.defaultAdjustmentPeriodId ? 'selected' : ''}>${escapeHtml(period.periodId)}</option>`).join('')}</select></label>
+            </div>
+            <label>Notes<textarea id="compNotes"></textarea></label>
+            <div class="form-actions">
+              <button type="button" class="secondary" onclick="clearAdminAction()">Cancel</button>
+              <button type="button" onclick="loadCompensationChangeEmployee()">Load Current Compensation</button>
+            </div>
+            <div id="compChangeFieldsHost"></div>
+          </div>
+        `;
+      }
+
+      function renderOffboardAction(data) {
+        return `
+          <div class="action-panel">
+            <h2>Offboard Employee</h2>
+            <div class="admin-form-grid">
+              <label>Employee<select id="offboardEmployee">${optionList(data.employees || [], 'employeeCode', 'displayName')}</select></label>
+              <label>Event Type<select id="offboardEvent">${(data.eventTypes || []).map(type => `<option>${escapeHtml(type)}</option>`).join('')}</select></label>
+              <label>Last Working Day<input id="offboardLastDay" type="date" value="${escapeAttr(data.today || '')}"></label>
+              <label>Reason<input id="offboardReason"></label>
+            </div>
+            <label>Notes<textarea id="offboardNotes"></textarea></label>
+            <div class="form-actions">
+              <button type="button" class="secondary" onclick="loadOffboardPreview()">Preview Final Payroll</button>
+              <button id="adminActionButton" type="button" onclick="runAdminAction('offboardEmployee', collectOffboardPayload())">Save Offboarding</button>
+            </div>
+            <div id="offboardPreviewHost"></div>
+          </div>
+        `;
+      }
+
+      function renderReactivateAction(data) {
+        const compDefaults = { ptoPlanType: data.defaultPtoPlanType || 'Fixed Annual' };
+        return `
+          <div class="action-panel">
+            <h2>Reactivate Employee</h2>
+            <div class="admin-form-grid">
+              <label>Employee<select id="reactivateEmployee" onchange="loadReactivateEmployeeData()">${optionList(data.employees || [], 'employeeCode', 'displayName')}</select></label>
+              <label>Start Date<input id="reactivateStartDate" type="date" value="${escapeAttr(data.today || '')}"></label>
+              <label>Reason<input id="reactivateReason"></label>
+              <label>Position<input id="reactivatePosition"></label>
+              <label>Manager<input id="reactivateManager"></label>
+            </div>
+            <div class="form-actions">
+              <button type="button" class="secondary" onclick="loadReactivateEmployeeData()">Load Employee Details</button>
+              <button type="button" class="secondary" onclick="clearAdminAction()">Cancel</button>
+            </div>
+            ${renderScheduleEditor('reactivateSchedule', data.defaultSchedule)}
+            ${renderCompEditor('reactivate', data.compFields || [], compDefaults)}
+            <label>Notes<textarea id="reactivateNotes"></textarea></label>
+            ${adminActionButtons("runAdminAction('reactivateEmployee', collectReactivatePayload())")}
+          </div>
+        `;
+      }
+
+      function renderAddEmployeeAction(data) {
+        const isPayrollAdmin = adminHasRole((adminState.portalUser || {}).role, 'Payroll Admin');
+        const compDefaults = { ptoPlanType: data.defaultPtoPlanType || 'Fixed Annual' };
+        const portalRoles = isPayrollAdmin
+          ? (data.portalRoles || [])
+          : (data.portalRoles || []).filter(role => role !== 'Payroll Admin');
+        return `
+          <div class="action-panel">
+            <h2>Add Employee</h2>
+            <div class="admin-form-grid">
+              <label>Full Name<input id="newFullName"></label>
+              <label>Display Name<input id="newDisplayName"></label>
+              <label>Employee Code<input id="newEmployeeCode"></label>
+              <label>Email<input id="newEmail" type="email"></label>
+              <label>Department<select id="newDepartment">${(data.departments || []).map(item => `<option>${escapeHtml(item)}</option>`).join('')}</select></label>
+              <label>Portal Role<select id="newPortalRole">${portalRoles.map(item => `<option>${escapeHtml(item)}</option>`).join('')}</select></label>
+              <label>Start Date<input id="newStartDate" type="date" value="${escapeAttr(data.today || '')}"></label>
+              <label>PIN<input id="newPin"></label>
+              <label>Position<input id="newPosition"></label>
+              <label>Manager<input id="newManager"></label>
+            </div>
+            ${renderScheduleEditor('newSchedule', data.defaultSchedule)}
+            ${isPayrollAdmin ? renderCompEditor('new', data.compFields || [], compDefaults) : ''}
+            <label>Notes<textarea id="newNotes"></textarea></label>
+            ${adminActionButtons("runAdminAction('addEmployee', collectAddEmployeePayload())")}
+          </div>
+        `;
+      }
+
+      function renderScheduleEditor(prefix, schedule) {
+        const normalized = normalizeScheduleForForm(schedule);
+        return `
+          <div class="admin-workflow-section">
+            <h3>Work Schedule</h3>
+            <p class="request-note">Set each normal working day. Lunch stays optional because employees clock lunch when they take it.</p>
+            <table class="admin-schedule-table">
+              <thead><tr><th>Day</th><th>Works</th><th>Start</th><th>End</th></tr></thead>
+              <tbody>
+                ${DAYS.map(day => `
+                  <tr>
+                    <td>${escapeHtml(day)}</td>
+                    <td><input id="${prefix}${day}Enabled" type="checkbox" ${normalized[day].enabled ? 'checked' : ''}></td>
+                    <td><input id="${prefix}${day}Start" value="${escapeAttr(normalized[day].start)}" placeholder="10:00am"></td>
+                    <td><input id="${prefix}${day}End" value="${escapeAttr(normalized[day].end)}" placeholder="07:00pm"></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+            <div class="admin-form-grid">
+              <label>Scheduled Lunch Start<input id="${prefix}LunchStart" value="${escapeAttr(normalized.lunchStart)}" placeholder="Optional"></label>
+              <label>Scheduled Lunch End<input id="${prefix}LunchEnd" value="${escapeAttr(normalized.lunchEnd)}" placeholder="Optional"></label>
+            </div>
+          </div>
+        `;
+      }
+
+      function normalizeScheduleForForm(schedule) {
+        const source = schedule || {};
+        const normalized = {
+          lunchStart: source.lunchStart || '',
+          lunchEnd: source.lunchEnd || ''
+        };
+        DAYS.forEach(day => {
+          normalized[day] = {
+            enabled: source[day] && source[day].enabled !== undefined
+              ? Boolean(source[day].enabled)
+              : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].indexOf(day) !== -1,
+            start: source[day] && source[day].start ? source[day].start : '10:00am',
+            end: source[day] && source[day].end ? source[day].end : '07:00pm'
+          };
+        });
+        return normalized;
+      }
+
+      function renderCompEditor(prefix, fields, values) {
+        const safeValues = values || {};
+        return `
+          <div class="admin-workflow-section">
+            <h3>Compensation</h3>
+            <div class="admin-form-grid">
+              ${(fields || []).map(field => renderCompField(prefix, field, safeValues[field.key])).join('')}
+            </div>
+          </div>
+        `;
+      }
+
+      function renderCompField(prefix, field, rawValue) {
+        const value = rawValue === undefined || rawValue === null ? '' : rawValue;
+        const className = `${prefix}-comp-field comp-field`;
+        if (field.type === 'select') {
+          return `<label>${escapeHtml(field.label)}<select class="${className}" data-key="${escapeAttr(field.key)}">${(field.options || []).map(option => `<option value="${escapeAttr(option)}" ${String(option) === String(value) ? 'selected' : ''}>${escapeHtml(option)}</option>`).join('')}</select></label>`;
+        }
+        const inputType = field.type === 'number' ? 'number' : 'text';
+        const step = field.type === 'number' ? ' step="0.01" min="0"' : '';
+        return `<label>${escapeHtml(field.label)}<input class="${className}" data-key="${escapeAttr(field.key)}" type="${inputType}"${step} value="${escapeAttr(value)}"></label>`;
+      }
+
+      function loadCompensationChangeEmployee() {
+        const host = document.getElementById('compChangeFieldsHost');
+        if (host) host.innerHTML = '<p class="loading">Loading compensation</p>';
+        google.script.run
+          .withSuccessHandler(data => {
+            if (host) host.innerHTML = renderCompChangeFields(data || {});
+          })
+          .withFailureHandler(showError)
+          .getPortalActionData('compensationChangeEmployee', {
+            employeeCode: value('compEmployee'),
+            effectiveFrom: value('compEffectiveFrom')
+          }, getIdentity());
+      }
+
+      function renderCompChangeFields(data) {
+        const values = {};
+        (data.fields || []).forEach(field => {
+          values[field.key] = field.value;
+        });
+        return `
+          <div class="admin-workflow-section">
+            <h3>Current Compensation</h3>
+            <p class="request-note">Current row: ${escapeHtml(data.effectiveFrom || 'blank')} through ${escapeHtml(data.effectiveTo || 'open')}. Edit only the fields that should change.</p>
+            <div class="admin-form-grid">
+              ${(data.fields || []).map(field => renderCompField('compChange', field, values[field.key])).join('')}
+            </div>
+            ${adminActionButtons("runAdminAction('saveCompensationChange', collectCompChangePayload())")}
+          </div>
+        `;
+      }
+
+      function toggleCompRetroFields() {
+        const show = value('compRetroactive') === 'true';
+        document.querySelectorAll('.comp-retro-field').forEach(node => {
+          node.classList.toggle('hidden', !show);
+        });
+      }
+
+      function loadOffboardPreview() {
+        const host = document.getElementById('offboardPreviewHost');
+        if (host) host.innerHTML = '<p class="loading">Building preview</p>';
+        google.script.run
+          .withSuccessHandler(data => {
+            if (host) host.innerHTML = renderOffboardPreview(data || {});
+          })
+          .withFailureHandler(showError)
+          .getPortalActionData('offboardPreview', collectOffboardPayload(), getIdentity());
+      }
+
+      function renderOffboardPreview(data) {
+        const metrics = [
+          { label: 'Final Period', value: data.finalPeriodId || '' },
+          { label: 'Benefit Preview', value: data.benefitPreview === '' ? 'Blank' : data.benefitPreview },
+          { label: 'PTO Payout', value: data.ptoPayout === '' ? 'Blank' : data.ptoPayout },
+          { label: 'KPI Proration', value: data.kpi && data.kpi.proratedAmount !== '' ? data.kpi.proratedAmount : 'Blank' }
+        ];
+        return `
+          <div class="admin-workflow-section">
+            <h3>Final Payroll Preview</h3>
+            ${renderDashboardMetrics(metrics)}
+            <p class="request-note">${escapeHtml(data.ptoPayoutNote || '')}</p>
+            <p class="request-note">${escapeHtml(data.kpi && data.kpi.note || '')}</p>
+          </div>
+        `;
+      }
+
+      function loadReactivateEmployeeData() {
+        google.script.run
+          .withSuccessHandler(data => {
+            const position = document.getElementById('reactivatePosition');
+            const manager = document.getElementById('reactivateManager');
+            if (position) position.value = data.position || '';
+            if (manager) manager.value = data.manager || '';
+            setStatus(`Loaded ${data.displayName || data.employeeCode}.`);
+          })
+          .withFailureHandler(showError)
+          .getPortalActionData('reactivateEmployee', { employeeCode: value('reactivateEmployee') }, getIdentity());
+      }
+
+      function renderAdminTimeOffBalance() {
+        const code = value('adminTimeOffEmployee');
+        const balance = adminTimeOffBalances[code] || {};
+        const node = document.getElementById('adminTimeOffBalance');
+        if (!node) return;
+        const type = value('adminTimeOffType');
+        if (type === 'Non-PTO') {
+          node.textContent = balance.remainingNonPto === undefined || balance.remainingNonPto === '' ? 'Blank' : `${balance.remainingNonPto}h`;
+        } else if (type === 'PTO') {
+          node.textContent = balance.remainingPto === undefined || balance.remainingPto === '' ? 'Blank' : `${balance.remainingPto}h`;
+        } else {
+          node.textContent = 'Unpaid';
+        }
+      }
+
+      function toggleAdminTimeOffTimes() {
+        const isFullDay = Boolean(document.getElementById('adminTimeOffFullDay') && document.getElementById('adminTimeOffFullDay').checked);
+        document.querySelectorAll('.admin-timeoff-time-field').forEach(node => {
+          node.classList.toggle('hidden', isFullDay);
+        });
+      }
+
+      function previewAdminTimeOff() {
+        clearTimeout(adminTimeOffPreviewTimer);
+        adminTimeOffPreviewTimer = setTimeout(updateAdminTimeOffPreview, 250);
+      }
+
+      function updateAdminTimeOffPreview() {
+        renderAdminTimeOffBalance();
+        const hoursNode = document.getElementById('adminTimeOffHours');
+        const noteNode = document.getElementById('adminTimeOffNote');
+        const fullDayNode = document.getElementById('adminTimeOffFullDay');
+        if (!fullDayNode) return;
+        if (!value('adminTimeOffEmployee') || !value('adminTimeOffStartDate') || !value('adminTimeOffEndDate')) return;
+        if (!fullDayNode.checked && (!value('adminTimeOffStartTime') || !value('adminTimeOffEndTime'))) {
+          if (hoursNode) hoursNode.textContent = 'Blank';
+          if (noteNode) noteNode.textContent = 'Enter start and end time.';
           return;
         }
-        setIdentity({ employeeCode, pin });
-        loadState();
+        if (hoursNode) hoursNode.textContent = 'Checking';
+        google.script.run
+          .withSuccessHandler(result => {
+            if (hoursNode) hoursNode.textContent = result.label || 'Blank';
+            if (noteNode) noteNode.textContent = result.note || '';
+          })
+          .withFailureHandler(error => {
+            if (hoursNode) hoursNode.textContent = 'Blank';
+            if (noteNode) noteNode.textContent = error && error.message ? error.message : String(error);
+          })
+          .getPortalActionData('timeOffPreview', collectAdminTimeOffRequestPayload(), getIdentity());
+      }
+
+      function renderScorecardAction(data) {
+        return `
+          <div class="action-panel">
+            <h2>Scorecard</h2>
+            <div class="admin-form-grid">
+              <label>Employee<select id="scoreEmployee">${optionList(data.employees || [], 'employeeCode', 'displayName')}</select></label>
+              <label>Month<select id="scoreMonth">${(data.months || []).map(month => `<option value="${escapeAttr(month.key)}" ${month.key === data.defaultMonth ? 'selected' : ''}>${escapeHtml(month.label)}</option>`).join('')}</select></label>
+            </div>
+            ${adminActionButtons("runAdminAction('saveScorecard', { employeeCode: value('scoreEmployee'), month: value('scoreMonth') })", 'Save Scorecard Tab')}
+          </div>
+        `;
+      }
+
+      function showMarkPaidForm() {
+        const periodId = (((adminState.dashboard || {}).payroll || {}).defaultPeriodId) || '';
+        const host = document.getElementById('adminActionHost');
+        if (!host) return;
+        host.innerHTML = `
+          <div class="action-panel">
+            <h2>Mark Pay Period Paid</h2>
+            <label>Period ID<input id="markPaidPeriod" value="${escapeAttr(periodId)}"></label>
+            ${adminActionButtons("runAdminAction('markPayPeriodPaid', { periodId: value('markPaidPeriod') })")}
+          </div>
+        `;
+      }
+
+      function showRebuildAttendanceForm() {
+        const host = document.getElementById('adminActionHost');
+        if (!host) return;
+        const today = getLocalDateInputValue();
+        host.innerHTML = `
+          <div class="action-panel">
+            <h2>Rebuild Attendance Log</h2>
+            <p class="request-note">Use a targeted date window for routine corrections. Full rebuilds should stay a fallback workflow.</p>
+            <div class="admin-form-grid">
+              <label>Start Date<input id="rebuildStartDate" type="date" value="${escapeAttr(today)}"></label>
+              <label>End Date<input id="rebuildEndDate" type="date" value="${escapeAttr(today)}"></label>
+            </div>
+            ${adminActionButtons("runAdminAction('rebuildAttendanceLog', { startDate: value('rebuildStartDate'), endDate: value('rebuildEndDate') })", 'Rebuild Window')}
+          </div>
+        `;
+      }
+
+      function adminActionButtons(onclick, label) {
+        return `
+          <div class="form-actions">
+            <button type="button" class="secondary" onclick="clearAdminAction()">Cancel</button>
+            <button id="adminActionButton" type="button" onclick="${onclick}">${escapeHtml(label || 'Save')}</button>
+          </div>
+        `;
+      }
+
+      function clearAdminAction() {
+        const host = document.getElementById('adminActionHost');
+        if (host) host.innerHTML = '';
+      }
+
+      function runSimpleAdminAction(action) {
+        runAdminAction(action, {});
+      }
+
+      function runAdminAction(action, payload) {
+        setAdminBusy(true);
+        setStatus('Running action...');
+        google.script.run
+          .withSuccessHandler(result => {
+            setStatus(result.message || 'Action complete.');
+            setAdminBusy(false);
+            refreshAdminDashboard();
+          })
+          .withFailureHandler(error => {
+            showError(error);
+            setAdminBusy(false);
+          })
+          .runPortalAction(action, payload || {}, getIdentity());
+      }
+
+      function refreshAdminDashboard() {
+        google.script.run
+          .withSuccessHandler(dashboard => {
+            if (!adminState) return;
+            adminState.dashboard = dashboard;
+            const content = document.getElementById('adminContent');
+            if (content) content.innerHTML = renderAdminView();
+          })
+          .withFailureHandler(showError)
+          .refreshPortalDashboard(getIdentity());
+      }
+
+      function setAdminBusy(disabled) {
+        const button = document.getElementById('adminActionButton');
+        if (button) button.disabled = disabled;
+      }
+
+      function loadPortalTable(tabKey) {
+        if (tabKey && tabKey !== activeDataTab) {
+          activeDataOffset = 0;
+          activeDataQuery = '';
+        }
+        activeDataTab = tabKey || activeDataTab;
+        const host = document.getElementById('dataTableHost');
+        if (host) host.innerHTML = '<p class="loading">Loading data</p>';
+        google.script.run
+          .withSuccessHandler(renderPortalTable)
+          .withFailureHandler(showError)
+          .getPortalTableData(activeDataTab, {
+            limit: activeDataLimit,
+            offset: activeDataOffset,
+            query: activeDataQuery
+          }, getIdentity());
+      }
+
+      function renderDataView() {
+        if (activeDataTab) loadPortalTable(activeDataTab);
+      }
+
+      function submitDataSearch() {
+        activeDataQuery = value('dataQuery');
+        activeDataOffset = 0;
+        activeDataLimit = Number(value('dataLimit')) || activeDataLimit;
+        loadPortalTable(activeDataTab);
+      }
+
+      function pagePortalTable(direction) {
+        activeDataOffset = Math.max(0, activeDataOffset + (direction * activeDataLimit));
+        loadPortalTable(activeDataTab);
+      }
+
+      function renderPortalTable(data) {
+        const host = document.getElementById('dataTableHost');
+        if (!host) return;
+        const headers = data.headers || [];
+        const rows = data.rows || [];
+        activeDataOffset = data.offset || 0;
+        activeDataLimit = data.limit || activeDataLimit;
+        activeDataQuery = data.query || activeDataQuery || '';
+        const startRow = rows.length ? activeDataOffset + 1 : 0;
+        const endRow = activeDataOffset + rows.length;
+        host.innerHTML = `
+          <h2>${escapeHtml(data.title || 'Data')}</h2>
+          <p class="request-note">${escapeHtml(startRow)}-${escapeHtml(endRow)} of ${escapeHtml(data.totalRows)} row(s). Source: ${escapeHtml(data.source)}</p>
+          <div class="data-controls">
+            <label>Search<input id="dataQuery" value="${escapeAttr(activeDataQuery)}" onkeydown="if(event.key === 'Enter') submitDataSearch()"></label>
+            <label>Rows<select id="dataLimit" onchange="activeDataLimit = Number(this.value); activeDataOffset = 0; loadPortalTable(activeDataTab)">
+              ${[50, 100, 250].map(limit => `<option value="${limit}" ${Number(activeDataLimit) === limit ? 'selected' : ''}>${limit}</option>`).join('')}
+            </select></label>
+            <button type="button" class="secondary compact" onclick="submitDataSearch()">Apply</button>
+            <button type="button" class="secondary compact" onclick="activeDataQuery=''; activeDataOffset=0; loadPortalTable(activeDataTab)">Clear</button>
+          </div>
+          <div class="data-table-wrap">
+            <table class="data-table">
+              <thead><tr>${headers.map(header => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead>
+              <tbody>${rows.map(row => `<tr>${headers.map((_, index) => `<td>${escapeHtml(row[index])}</td>`).join('')}</tr>`).join('')}</tbody>
+            </table>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="secondary" ${data.hasPrevious ? '' : 'disabled'} onclick="pagePortalTable(-1)">Previous</button>
+            <button type="button" class="secondary" ${data.hasNext ? '' : 'disabled'} onclick="pagePortalTable(1)">Next</button>
+          </div>
+        `;
+      }
+
+      function optionList(rows, valueKey, labelKey) {
+        return (rows || []).map(row => `<option value="${escapeAttr(row[valueKey])}">${escapeHtml(row[labelKey] || row[valueKey])}</option>`).join('');
+      }
+
+      function collectManualClockPayload() {
+        return {
+          employeeCode: value('adminEmployee'),
+          eventType: value('adminEventType'),
+          timestamp: value('adminTimestamp'),
+          notes: value('adminNotes')
+        };
+      }
+
+      function collectAdminTimeOffRequestPayload() {
+        return {
+          employeeCode: value('adminTimeOffEmployee'),
+          type: value('adminTimeOffType'),
+          startDate: value('adminTimeOffStartDate'),
+          endDate: value('adminTimeOffEndDate'),
+          fullDay: document.getElementById('adminTimeOffFullDay') && document.getElementById('adminTimeOffFullDay').checked ? 'Yes' : 'No',
+          startTime: value('adminTimeOffStartTime'),
+          endTime: value('adminTimeOffEndTime'),
+          reason: value('adminTimeOffReason')
+        };
+      }
+
+      function collectAdminMakeupRequestPayload() {
+        return {
+          employeeCode: value('adminMakeupEmployee'),
+          date: value('adminMakeupDate'),
+          hoursRequested: value('adminMakeupHours'),
+          reason: value('adminMakeupReason')
+        };
+      }
+
+      function collectRequestDecisions() {
+        const decisions = [];
+        document.querySelectorAll('.request-decision').forEach(select => {
+          const requestId = select.getAttribute('data-request-id');
+          const notesNode = document.querySelector(`.request-notes[data-request-id="${cssEscape(requestId)}"]`);
+          decisions.push({
+            kind: select.getAttribute('data-kind'),
+            requestId,
+            decision: select.value,
+            notes: notesNode ? notesNode.value.trim() : ''
+          });
+        });
+        return { decisions };
+      }
+
+      function collectTimestampRevisionDecisions() {
+        const decisions = [];
+        document.querySelectorAll('.timestamp-decision').forEach(select => {
+          const requestId = select.getAttribute('data-request-id');
+          const notesNode = document.querySelector(`.timestamp-notes[data-request-id="${cssEscape(requestId)}"]`);
+          decisions.push({
+            requestId,
+            decision: select.value,
+            notes: notesNode ? notesNode.value.trim() : ''
+          });
+        });
+        return { decisions };
+      }
+
+      function collectCalculatePayrollPayload() {
+        return {
+          periodId: value('adminPeriod'),
+          employeeCodes: Array.from(document.querySelectorAll('.payroll-employee:checked')).map(node => node.value)
+        };
+      }
+
+      function collectKpiPayload(periodId) {
+        return {
+          periodId,
+          rows: Array.from(document.querySelectorAll('.kpi-row')).map(row => ({
+            employeeCode: row.getAttribute('data-employee'),
+            approvedPercent: (row.querySelector('.kpi-percent') || {}).value || '',
+            notes: (row.querySelector('.kpi-notes') || {}).value || ''
+          }))
+        };
+      }
+
+      function collectBonusPayload() {
+        const mode = value('bonusMode');
+        return {
+          entryMode: mode,
+          periodId: value('bonusPeriod'),
+          employeeCode: value('bonusEmployee'),
+          adjustmentType: mode === 'additional' ? 'Additional' : value('bonusType'),
+          amount: value('bonusAmount'),
+          description: value('bonusDescription')
+        };
+      }
+
+      function collectCompChangePayload() {
+        return {
+          employeeCode: value('compEmployee'),
+          effectiveFrom: value('compEffectiveFrom'),
+          reason: value('compReason'),
+          retroactive: value('compRetroactive') === 'true',
+          retroStart: value('compRetroStart'),
+          retroEnd: value('compRetroEnd'),
+          adjustmentPeriodId: value('compAdjustmentPeriod'),
+          newComp: collectCompPayload('compChange'),
+          notes: value('compNotes')
+        };
+      }
+
+      function collectOffboardPayload() {
+        return {
+          employeeCode: value('offboardEmployee'),
+          eventType: value('offboardEvent'),
+          lastWorkingDay: value('offboardLastDay'),
+          reason: value('offboardReason'),
+          notes: value('offboardNotes')
+        };
+      }
+
+      function collectReactivatePayload() {
+        return {
+          employeeCode: value('reactivateEmployee'),
+          startDate: value('reactivateStartDate'),
+          reason: value('reactivateReason'),
+          position: value('reactivatePosition'),
+          manager: value('reactivateManager'),
+          schedule: collectSchedulePayload('reactivateSchedule'),
+          comp: collectCompPayload('reactivate'),
+          notes: value('reactivateNotes')
+        };
+      }
+
+      function collectAddEmployeePayload() {
+        const isPayrollAdmin = adminHasRole((adminState.portalUser || {}).role, 'Payroll Admin');
+        return {
+          includeComp: isPayrollAdmin,
+          fullName: value('newFullName'),
+          displayName: value('newDisplayName'),
+          employeeCode: value('newEmployeeCode'),
+          email: value('newEmail'),
+          department: value('newDepartment'),
+          portalRole: value('newPortalRole'),
+          startDate: value('newStartDate'),
+          pin: value('newPin'),
+          position: value('newPosition'),
+          manager: value('newManager'),
+          schedule: collectSchedulePayload('newSchedule'),
+          comp: isPayrollAdmin ? collectCompPayload('new') : {},
+          notes: value('newNotes')
+        };
+      }
+
+      function collectSchedulePayload(prefix) {
+        const schedule = {
+          lunchStart: value(`${prefix}LunchStart`),
+          lunchEnd: value(`${prefix}LunchEnd`)
+        };
+        DAYS.forEach(day => {
+          schedule[day] = {
+            enabled: Boolean(document.getElementById(`${prefix}${day}Enabled`) && document.getElementById(`${prefix}${day}Enabled`).checked),
+            start: value(`${prefix}${day}Start`),
+            end: value(`${prefix}${day}End`)
+          };
+        });
+        return schedule;
+      }
+
+      function collectCompPayload(prefix) {
+        const comp = {};
+        document.querySelectorAll(`.${prefix}-comp-field`).forEach(node => {
+          comp[node.getAttribute('data-key')] = node.value.trim();
+        });
+        return comp;
+      }
+
+      function cssEscape(value) {
+        if (window.CSS && CSS.escape) return CSS.escape(value);
+        return String(value || '').replace(/["\\]/g, '\\$&');
       }
 
       function submitEvent(eventType) {
@@ -933,6 +2399,8 @@
 
       function signOut() {
         activeView = 'clock';
+        loginMode = 'employee';
+        adminState = null;
         clearIdentity();
         latestState = null;
         loadState();
@@ -966,12 +2434,30 @@
         return `<p class="balance-line">Current year balance: ${escapeHtml(plan)} PTO earned ${escapeHtml(earned)}h, remaining ${escapeHtml(pto)}h | Non-PTO ${escapeHtml(nonPto)}h</p>`;
       }
 
-      function renderTimesheetSummaryLine(summary) {
+      function renderTimesheetDashboardNotice(summary) {
         if (!summary) return '';
         if (summary.unavailable) {
           return `<p class="balance-line">${escapeHtml(summary.message || 'Timesheet review unavailable.')}</p>`;
         }
-        return `<p class="balance-line">Timesheet review: ${escapeHtml(summary.openIssues || 0)} open issue(s), ${escapeHtml(summary.pendingRevisions || 0)} pending revision(s).</p>`;
+        const total = Number(summary.total || 0);
+        if (!total) {
+          return '<p class="balance-line">Timesheet review: no open flags or pending revisions.</p>';
+        }
+        const recentTotal = Number(summary.recentWorkingTotal || 0);
+        const recentDays = Number(summary.recentWorkingDaysChecked || 0);
+        const flaggedDays = (summary.recentFlaggedDays || []).join(', ');
+        const detail = recentTotal
+          ? `${recentTotal} flag(s) are from the last ${recentDays || 2} working day(s)${flaggedDays ? `: ${flaggedDays}` : ''}.`
+          : 'No flags are on the last two working days, but older current/recent items still need attention.';
+        const view = summary.recommendedView === 'currentPeriod' ? 'currentPeriod' : 'recent';
+        return `
+          <section class="timesheet-alert">
+            <p class="timesheet-alert-label">Timesheet Needs Review</p>
+            <h2 class="timesheet-alert-title">${escapeHtml(total)} open flag(s)</h2>
+            <p class="timesheet-alert-copy">${escapeHtml(detail)} Overall: ${escapeHtml(summary.openIssues || 0)} issue(s), ${escapeHtml(summary.pendingRevisions || 0)} pending revision(s).</p>
+            <button type="button" onclick="showTimesheetReview('${view}')">Review Timesheet</button>
+          </section>
+        `;
       }
 
       function pickStatusPhrase(state) {

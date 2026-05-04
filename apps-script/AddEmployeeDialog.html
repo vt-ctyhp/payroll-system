@@ -247,6 +247,10 @@
             <select id="department" required></select>
           </div>
           <div class="field">
+            <label for="portalRole">Portal Role</label>
+            <select id="portalRole"></select>
+          </div>
+          <div class="field">
             <label for="startDate">Start Date</label>
             <input id="startDate" type="date">
           </div>
@@ -367,6 +371,11 @@
             document.getElementById('department').innerHTML = [''].concat(departments)
               .map(department => `<option value="${escapeAttr(department)}">${department ? escapeHtml(department) : 'Select department'}</option>`)
               .join('');
+            const roles = defaults.portalRoles || ['Employee', 'Attendance Admin', 'Payroll Admin'];
+            document.getElementById('portalRole').innerHTML = roles
+              .map(role => `<option value="${escapeAttr(role)}">${escapeHtml(role)}</option>`)
+              .join('');
+            document.getElementById('portalRole').value = defaults.defaultPortalRole || 'Employee';
             const plans = defaults.ptoPlanTypes || ['Fixed Annual', 'Accrued Monthly'];
             document.getElementById('ptoPlanType').innerHTML = plans
               .map(plan => `<option value="${escapeAttr(plan)}">${escapeHtml(plan)}</option>`)
@@ -427,6 +436,7 @@
           position: value('position'),
           manager: value('manager'),
           department: value('department'),
+          portalRole: value('portalRole'),
           startDate: value('startDate'),
           pin: value('pin'),
           schedule,
