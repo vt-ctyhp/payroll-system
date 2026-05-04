@@ -35,6 +35,8 @@ const CONFIG = {
   sheetDateTimeFormat: 'yyyy-mm-dd hh:mmam/pm',
   legacyDayHours: 8,
   standardFullDayLunchHours: 1,
+  realTimesheetImportMarker: 'REAL_TIMESHEET_IMPORT',
+  realTimesheetEventIdPrefix: 'REAL-TS-',
   requestStatuses: ['Pending', 'Approved', 'Denied'],
   attendanceTabs: {
     employees: 'Employees',
@@ -91,6 +93,20 @@ const PHASE1_TEST = {
     CHARISSE: '1004'
   }
 };
+
+const TIMESHEET_IMPORT_INTERVAL_SPECS = [
+  { role: 'lunch', label: 'Lunch', durationIndex: 32, startIndex: 33, endIndex: 34 },
+  { role: 'lunch', label: 'Lunch', durationIndex: 35, startIndex: 36, endIndex: 37 },
+  { role: 'break', label: 'Break 1', durationIndex: 38, startIndex: 39, endIndex: 40 },
+  { role: 'break', label: 'Break 2', durationIndex: 41, startIndex: 42, endIndex: 43 },
+  { role: 'lunch', label: 'Lunch', durationIndex: 44, startIndex: 45, endIndex: 46 },
+  { role: 'break', label: 'Break 1', durationIndex: 47, startIndex: 48, endIndex: 49 },
+  { role: 'break', label: 'Break 2', durationIndex: 50, startIndex: 51, endIndex: 52 },
+  { role: 'break', label: 'Break 1', durationIndex: 53, startIndex: 54, endIndex: 55 },
+  { role: 'break', label: 'Break 2', durationIndex: 56, startIndex: 57, endIndex: 58 },
+  { role: 'lunch', label: '1-hour Lunch Break', durationIndex: 59, startIndex: 60, endIndex: 61 },
+  { role: 'break', label: '1st 15-minute Break', durationIndex: 62, startIndex: 63, endIndex: 64 }
+];
 
 function claspRunSmokeTest() {
   return 'clasp run works';
@@ -459,45 +475,821 @@ function createWorkflowInstructionsTabs() {
 }
 
 function injectPhase1TestData() {
+  throw new Error('Phase 1 synthetic test data injection has been retired. Use Attendance > Import Real Timesheet CSV instead.');
+}
+
+function importTimesheetCsvFromDialog(payload) {
+  payload = payload || {};
+  const options = {
+    calculatePayroll: payload.calculatePayroll !== false,
+    removePhase1TestData: payload.removePhase1TestData !== false
+  };
+  if (payload.fileBase64) return importRealTimesheetWorkbook(payload, options);
+  return importRealTimesheetCsv(payload.csvText || '', options);
+}
+
+function importRealTimesheetCsv(csvText, options) {
+  return withScriptLock_('Import Real Timesheet CSV', function() {
+    return importRealTimesheetCsv_(csvText, options || {});
+  });
+}
+
+function importRealTimesheetWorkbook(payload, options) {
+  return withScriptLock_('Import Real Timesheet Workbook', function() {
+    const values = parseRealTimesheetXlsxBase64_(payload.fileBase64, payload.fileName || 'timesheet.xlsx');
+    return importRealTimesheetValues_(values, options || {});
+  });
+}
+
+function importRealTimesheetCsv_(csvText, options) {
+  const text = String(csvText || '').trim();
+  if (!text) throw new Error('Paste the raw timesheet CSV before importing.');
+  return importRealTimesheetValues_(Utilities.parseCsv(text), options || {});
+}
+
+function importRealTimesheetValues_(values, options) {
   const attendance = requireAttendanceSpreadsheet_();
   const payroll = requirePayrollSpreadsheet_();
+  setupAttendanceSpreadsheet_(attendance, { formatMode: 'none', migrations: false });
+  setupPayrollSpreadsheet_(payroll, { formatMode: 'none', migrations: false });
 
-  setupAttendanceSpreadsheet_(attendance);
-  setupPayrollSpreadsheet_(payroll);
-  seedInitialEmployees_();
-  ensurePhase1TestPins_(attendance);
-  ensurePhase1TestPayPeriod_(payroll);
+  const importData = parseRealTimesheetValues_(values);
+  const startDate = importData.periodStart;
+  const endDate = importData.periodEnd;
+  const startKey = formatDateKey_(startDate);
+  const endKey = formatDateKey_(endDate);
 
+  const employeeSheet = getSheet_(attendance, CONFIG.attendanceTabs.employees);
+  const scheduleSheet = getSheet_(attendance, CONFIG.attendanceTabs.schedules);
   const eventSheet = getSheet_(attendance, CONFIG.attendanceTabs.events);
-  const rowsRemoved = removePhase1TestClockEvents_(eventSheet);
-  const eventRows = buildPhase1TestClockEventRows_(attendance);
-  appendRows_(eventSheet, eventRows);
-  eventSheet.getRange('B:B').setNumberFormat(CONFIG.sheetDateTimeFormat);
 
-  const attendanceResult = rebuildAttendanceLog({
-    startDate: formatDateKey_(PHASE1_TEST.periodStart),
-    endDate: formatDateKey_(PHASE1_TEST.periodEnd)
-  });
-  const payrollResult = calculatePayPeriod({
-    periodId: PHASE1_TEST.periodId,
-    employeeCodes: PHASE1_TEST.employeeCodes
-  });
+  const existingEmployees = readObjects_(employeeSheet);
+  const codeMap = buildRealTimesheetEmployeeCodeMap_(importData.employees, existingEmployees);
+  const importedCodes = importData.employees.map(employee => codeMap[employee.key].code);
+  const employeeResult = ensureRealTimesheetEmployees_(attendance, payroll, importData.employees, codeMap, startDate);
+
+  const scheduleRowsRemoved = removeRealTimesheetScheduleRows_(scheduleSheet, importedCodes, startDate, endDate);
+  const scheduleRows = buildRealTimesheetScheduleRows_(importData.employees, codeMap, startDate, endDate);
+  const scheduleRange = appendRows_(scheduleSheet, scheduleRows);
+
+  const fakeEventsRemoved = options.removePhase1TestData === false ? 0 : removePhase1TestClockEvents_(eventSheet);
+  const priorImportEventsRemoved = removeRealTimesheetClockEvents_(eventSheet);
+  const eventRows = buildRealTimesheetClockEventRows_(importData.entries, codeMap);
+  const eventRange = appendRows_(eventSheet, eventRows);
+
+  let payrollCleanup = { periodsRemoved: 0, calculationRowsRemoved: 0, outputRowsRemoved: 0 };
+  if (options.removePhase1TestData !== false) {
+    payrollCleanup = removePhase1TestPayrollData_(payroll);
+  }
+
+  applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.employees, employeeResult.employeeRange);
+  applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.schedules, scheduleRange);
+  applyAttendanceSheetFormatting_(attendance, CONFIG.attendanceTabs.events, eventRange);
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.comp, employeeResult.compRange);
+
+  const attendanceResult = rebuildAttendanceLog({ startDate: startKey, endDate: endKey });
+
+  let payrollResult = null;
+  let payrollError = '';
+  if (options.calculatePayroll !== false) {
+    try {
+      const periodId = ensureRealTimesheetPayPeriod_(payroll, startDate, endDate);
+      payrollResult = calculatePayPeriod_({
+        periodId,
+        employeeCodes: importedCodes
+      });
+    } catch (error) {
+      payrollError = error && error.message ? error.message : String(error);
+    }
+  }
 
   const result = {
-    periodId: PHASE1_TEST.periodId,
-    dateRange: `${formatDateKey_(PHASE1_TEST.periodStart)} through ${formatDateKey_(PHASE1_TEST.periodEnd)}`,
-    employees: PHASE1_TEST.employeeCodes,
-    rowsRemoved,
+    dateRange: `${startKey} through ${endKey}`,
+    sourceRowsRead: importData.entries.length,
+    employeesImported: importData.employees.length,
+    employeesAdded: employeeResult.employeesAdded,
+    compRowsAdded: employeeResult.compRowsAdded,
+    scheduleRowsRemoved,
+    scheduleRowsAdded: scheduleRows.length,
+    fakeEventsRemoved,
+    priorImportEventsRemoved,
     eventsAdded: eventRows.length,
     attendanceRowsWritten: attendanceResult.rowsWritten,
-    payrollMessage: payrollResult.message,
-    payrollWarnings: payrollResult.warnings,
+    payrollCleanup,
+    payrollMessage: payrollResult ? payrollResult.message : '',
+    payrollWarnings: payrollResult ? payrollResult.warnings : [],
+    payrollError,
     attendanceSpreadsheetUrl: attendance.getUrl(),
     payrollSpreadsheetUrl: payroll.getUrl(),
-    message: `Injected Phase 1 test data for ${PHASE1_TEST.periodId}.`
+    message: `Imported ${eventRows.length} real timesheet clock events for ${startKey} through ${endKey}.`
   };
   Logger.log(JSON.stringify(result, null, 2));
   return result;
+}
+
+function parseRealTimesheetXlsxBase64_(base64, fileName) {
+  const bytes = Utilities.base64Decode(String(base64 || ''));
+  const blob = Utilities.newBlob(bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', fileName || 'timesheet.xlsx');
+  let files;
+  try {
+    files = Utilities.unzip(blob);
+  } catch (error) {
+    throw new Error('The selected file could not be read as an .xlsx workbook. Export it as CSV and try again.');
+  }
+
+  const sheetBlob = findZipBlob_(files, 'xl/worksheets/sheet1.xml');
+  if (!sheetBlob) throw new Error('The .xlsx workbook does not contain a readable first worksheet.');
+  const sharedStrings = parseXlsxSharedStrings_(findZipBlob_(files, 'xl/sharedStrings.xml'));
+  const rows = parseXlsxWorksheetRows_(sheetBlob.getDataAsString(), sharedStrings);
+  if (!rows.length) throw new Error('The .xlsx workbook did not contain any worksheet rows.');
+  return rows;
+}
+
+function findZipBlob_(files, name) {
+  return (files || []).filter(file => file.getName() === name)[0] || null;
+}
+
+function parseXlsxSharedStrings_(blob) {
+  if (!blob) return [];
+  const ns = XmlService.getNamespace('http://schemas.openxmlformats.org/spreadsheetml/2006/main');
+  const root = XmlService.parse(blob.getDataAsString()).getRootElement();
+  return root.getChildren('si', ns).map(si => getXmlElementText_(si));
+}
+
+function parseXlsxWorksheetRows_(xmlText, sharedStrings) {
+  const ns = XmlService.getNamespace('http://schemas.openxmlformats.org/spreadsheetml/2006/main');
+  const root = XmlService.parse(xmlText).getRootElement();
+  const sheetData = root.getChild('sheetData', ns);
+  if (!sheetData) return [];
+
+  return sheetData.getChildren('row', ns).map(rowElement => {
+    const row = [];
+    rowElement.getChildren('c', ns).forEach(cell => {
+      const reference = cell.getAttribute('r') ? cell.getAttribute('r').getValue() : '';
+      const columnIndex = getXlsxColumnIndex_(reference);
+      row[columnIndex] = formatXlsxTimesheetCell_(readXlsxCellValue_(cell, ns, sharedStrings), columnIndex);
+    });
+    for (let index = 0; index < row.length; index += 1) {
+      if (row[index] === undefined) row[index] = '';
+    }
+    return row;
+  });
+}
+
+function readXlsxCellValue_(cell, ns, sharedStrings) {
+  const type = cell.getAttribute('t') ? cell.getAttribute('t').getValue() : '';
+  if (type === 'inlineStr') return getXmlElementText_(cell.getChild('is', ns));
+  const valueNode = cell.getChild('v', ns);
+  const raw = valueNode ? valueNode.getText() : '';
+  if (type === 's') return sharedStrings[Number(raw)] || '';
+  return raw;
+}
+
+function getXmlElementText_(element) {
+  if (!element) return '';
+  let text = element.getText() || '';
+  element.getChildren().forEach(child => {
+    text += getXmlElementText_(child);
+  });
+  return text;
+}
+
+function getXlsxColumnIndex_(reference) {
+  const letters = String(reference || '').replace(/[^A-Za-z]/g, '').toUpperCase();
+  let index = 0;
+  for (let i = 0; i < letters.length; i += 1) {
+    index = (index * 26) + letters.charCodeAt(i) - 64;
+  }
+  return Math.max(index - 1, 0);
+}
+
+function formatXlsxTimesheetCell_(value, columnIndex) {
+  const text = String(value === null || value === undefined ? '' : value).trim();
+  if (!text) return '';
+  const numeric = Number(text);
+  if (Number.isFinite(numeric)) {
+    if (columnIndex === 1) return formatExcelSerialDateForImport_(numeric);
+    if (isTimesheetTimeColumn_(columnIndex)) return formatExcelSerialTimeForImport_(numeric);
+  }
+  return text;
+}
+
+function isTimesheetTimeColumn_(columnIndex) {
+  if (columnIndex === 30 || columnIndex === 31) return true;
+  return TIMESHEET_IMPORT_INTERVAL_SPECS.some(spec => columnIndex === spec.startIndex || columnIndex === spec.endIndex);
+}
+
+function formatExcelSerialDateForImport_(serial) {
+  const date = new Date(1899, 11, 30 + Math.floor(Number(serial)));
+  return Utilities.formatDate(date, CONFIG.timezone, 'M/d/yyyy');
+}
+
+function formatExcelSerialTimeForImport_(serial) {
+  const totalMinutes = Math.round((Number(serial) % 1) * 24 * 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return displayTime_(new Date(2000, 0, 1, hours, minutes));
+}
+
+function parseRealTimesheetCsv_(csvText) {
+  const values = Utilities.parseCsv(csvText);
+  return parseRealTimesheetValues_(values);
+}
+
+function parseRealTimesheetValues_(values) {
+  if (!values || values.length < 2) throw new Error('The timesheet file did not contain any data rows.');
+
+  const headers = values[0].map(value => String(value || '').trim());
+  validateRealTimesheetHeaders_(headers);
+  const intervalSpecs = getRealTimesheetIntervalSpecs_(headers);
+
+  const entries = [];
+  const employeesByKey = {};
+  let periodStart = null;
+  let periodEnd = null;
+
+  for (let index = 1; index < values.length; index += 1) {
+    const row = values[index];
+    if (!row || !row.some(cell => String(cell || '').trim() !== '')) continue;
+
+    const rowNumber = index + 1;
+    const date = parseRealTimesheetDate_(row[1], rowNumber);
+    const fullName = cleanImportCell_(row[2]);
+    if (!fullName) throw new Error(`Row ${rowNumber} is missing Full Name.`);
+    const memberCode = cleanImportCell_(row[3]);
+    const position = cleanImportCell_(row[4]);
+    const group = cleanImportCell_(row[6]);
+    const manager = cleanImportCell_(row[7]);
+    const workSchedule = cleanImportCell_(row[8]);
+    if (!workSchedule) throw new Error(`Row ${rowNumber} is missing Work Schedule.`);
+
+    const key = getRealTimesheetEmployeeKey_(fullName, memberCode);
+    if (!employeesByKey[key]) {
+      employeesByKey[key] = {
+        key,
+        fullName,
+        memberCode,
+        position,
+        group,
+        manager,
+        scheduleCounts: {},
+        scheduleOrder: []
+      };
+    }
+    countRealTimesheetSchedule_(employeesByKey[key], workSchedule);
+
+    const entry = {
+      rowNumber,
+      date,
+      employeeKey: key,
+      fullName,
+      memberCode,
+      workSchedule,
+      firstIn: parseRealTimesheetTimeOrBlank_(row[30], rowNumber, 'First In'),
+      lastOut: parseRealTimesheetTimeOrBlank_(row[31], rowNumber, 'Last Out'),
+      intervals: collectRealTimesheetIntervals_(row, rowNumber, intervalSpecs)
+    };
+    entries.push(entry);
+
+    if (!periodStart || dateOnly_(date).getTime() < dateOnly_(periodStart).getTime()) periodStart = dateOnly_(date);
+    if (!periodEnd || dateOnly_(date).getTime() > dateOnly_(periodEnd).getTime()) periodEnd = dateOnly_(date);
+  }
+
+  if (!entries.length) throw new Error('The CSV did not contain importable timesheet rows.');
+
+  const employees = Object.keys(employeesByKey)
+    .map(key => {
+      const employee = employeesByKey[key];
+      employee.workSchedule = getMostCommonRealTimesheetSchedule_(employee);
+      return employee;
+    })
+    .sort((a, b) => a.fullName.localeCompare(b.fullName));
+
+  return {
+    periodStart,
+    periodEnd,
+    entries,
+    employees
+  };
+}
+
+function validateRealTimesheetHeaders_(headers) {
+  const expected = {
+    1: 'Date',
+    2: 'Full Name',
+    3: 'Member Code',
+    8: 'Work Schedule',
+    30: 'First In',
+    31: 'Last Out'
+  };
+  Object.keys(expected).forEach(indexText => {
+    const index = Number(indexText);
+    if (headers[index] !== expected[index]) {
+      throw new Error(`This does not look like the expected raw timesheet export. Column ${index + 1} should be "${expected[index]}".`);
+    }
+  });
+  if (headers.length < 41) {
+    throw new Error('This CSV is missing the First In / Last Out / lunch-break columns expected from the raw timesheet export.');
+  }
+}
+
+function getRealTimesheetIntervalSpecs_(headers) {
+  const specs = [];
+  for (let index = 32; index < headers.length - 2; index += 1) {
+    const label = String(headers[index] || '').trim();
+    const startHeader = String(headers[index + 1] || '').trim();
+    const endHeader = String(headers[index + 2] || '').trim();
+    if (!label) continue;
+    const isLunch = /lunch/i.test(label);
+    const isBreak = /break/i.test(label);
+    if (!isLunch && !isBreak) continue;
+    if (startHeader !== `${label} Start` || endHeader !== `${label} End`) continue;
+    specs.push({
+      role: isLunch ? 'lunch' : 'break',
+      label,
+      durationIndex: index,
+      startIndex: index + 1,
+      endIndex: index + 2
+    });
+    index += 2;
+  }
+  if (!specs.length) {
+    throw new Error('This CSV is missing lunch/break interval columns from the raw timesheet export.');
+  }
+  return specs;
+}
+
+function countRealTimesheetSchedule_(employee, workSchedule) {
+  if (!employee.scheduleCounts[workSchedule]) {
+    employee.scheduleCounts[workSchedule] = 0;
+    employee.scheduleOrder.push(workSchedule);
+  }
+  employee.scheduleCounts[workSchedule] += 1;
+}
+
+function getMostCommonRealTimesheetSchedule_(employee) {
+  return employee.scheduleOrder
+    .slice()
+    .sort((a, b) => employee.scheduleCounts[b] - employee.scheduleCounts[a])[0] || '';
+}
+
+function buildRealTimesheetEmployeeCodeMap_(importEmployees, existingEmployees) {
+  const existingByCode = {};
+  const existingByName = {};
+  existingEmployees.forEach(employee => {
+    const code = normalizeCode_(employee['Employee Code']);
+    if (!code) return;
+    existingByCode[code] = employee;
+    const fullNameKey = normalizeImportedName_(employee['Full Name']);
+    const displayNameKey = normalizeImportedName_(employee['Display Name']);
+    if (fullNameKey) existingByName[fullNameKey] = code;
+    if (displayNameKey) existingByName[displayNameKey] = code;
+  });
+
+  const usedCodes = {};
+  const map = {};
+  importEmployees.forEach(employee => {
+    const nameKey = normalizeImportedName_(employee.fullName);
+    let code = existingByName[nameKey] || '';
+    if (!code) {
+      const baseCode = normalizeCode_(employee.memberCode) || suggestEmployeeCode_(employee.fullName);
+      code = getAvailableImportedEmployeeCode_(baseCode, existingByCode, usedCodes);
+    }
+    usedCodes[code] = true;
+    map[employee.key] = {
+      code,
+      existing: Boolean(existingByCode[code]),
+      employee
+    };
+  });
+  return map;
+}
+
+function getAvailableImportedEmployeeCode_(baseCode, existingByCode, usedCodes) {
+  let code = normalizeCode_(baseCode) || 'EMPLOYEE';
+  let suffix = 2;
+  while ((existingByCode[code] && !usedCodes[code]) || usedCodes[code]) {
+    code = `${normalizeCode_(baseCode) || 'EMPLOYEE'}-${suffix}`;
+    suffix += 1;
+  }
+  return code;
+}
+
+function ensureRealTimesheetEmployees_(attendance, payroll, importEmployees, codeMap, startDate) {
+  const employeeSheet = getSheet_(attendance, CONFIG.attendanceTabs.employees);
+  const compSheet = getSheet_(payroll, CONFIG.payrollTabs.comp);
+  const existingEmployeeCodes = {};
+  readObjects_(employeeSheet).forEach(row => {
+    const code = normalizeCode_(row['Employee Code']);
+    if (code) existingEmployeeCodes[code] = true;
+  });
+  const existingCompCodes = {};
+  readObjects_(compSheet).forEach(row => {
+    const code = normalizeCode_(row['Employee Code']);
+    if (code) existingCompCodes[code] = true;
+  });
+
+  const employeeRows = [];
+  const compRows = [];
+  importEmployees.forEach(employee => {
+    const mapped = codeMap[employee.key];
+    const code = mapped.code;
+    const notes = `${CONFIG.realTimesheetImportMarker}: imported from member code ${employee.memberCode || 'blank'} for historical timesheet testing.`;
+    if (!existingEmployeeCodes[code]) {
+      employeeRows.push([
+        code,
+        employee.fullName,
+        String(employee.fullName || '').split(/\s+/)[0] || code,
+        'Active',
+        dateOnly_(startDate),
+        '',
+        employee.position || '',
+        employee.manager || '',
+        '',
+        '',
+        notes,
+        '',
+        CONFIG.defaultPortalRole
+      ]);
+      existingEmployeeCodes[code] = true;
+    }
+    if (!existingCompCodes[code]) {
+      compRows.push([
+        code,
+        dateOnly_(startDate),
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        `${CONFIG.realTimesheetImportMarker}: compensation pending; row added so payroll tests can surface missing values explicitly.`,
+        CONFIG.defaultPtoPlanType,
+        ''
+      ]);
+      existingCompCodes[code] = true;
+    }
+  });
+
+  return {
+    employeesAdded: employeeRows.length,
+    compRowsAdded: compRows.length,
+    employeeRange: appendRows_(employeeSheet, employeeRows),
+    compRange: appendRows_(compSheet, compRows)
+  };
+}
+
+function buildRealTimesheetScheduleRows_(importEmployees, codeMap, startDate, endDate) {
+  return importEmployees.map(employee => {
+    const schedule = parseRealTimesheetWorkSchedule_(employee.workSchedule);
+    const row = buildScheduleRow_(codeMap[employee.key].code, dateOnly_(startDate), schedule);
+    row[2] = dateOnly_(endDate);
+    return row;
+  });
+}
+
+function parseRealTimesheetWorkSchedule_(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/^(.+?)\s+(\d{1,2}(?::\d{2})?\s*[aApP][mM])\s*-\s*(\d{1,2}(?::\d{2})?\s*[aApP][mM])$/);
+  if (!match) throw new Error(`Unsupported work schedule format: ${text}`);
+  return {
+    days: parseRealTimesheetScheduleDays_(match[1]),
+    start: formatScheduleTimeValue_(match[2]),
+    end: formatScheduleTimeValue_(match[3]),
+    lunchStart: '',
+    lunchEnd: ''
+  };
+}
+
+function parseRealTimesheetScheduleDays_(value) {
+  const days = [];
+  String(value || '').split(',').forEach(token => {
+    const part = token.trim();
+    if (!part) return;
+    const range = part.split('-').map(item => item.trim()).filter(Boolean);
+    if (range.length === 1) {
+      addImportedScheduleDay_(days, range[0]);
+    } else if (range.length === 2) {
+      addImportedScheduleDayRange_(days, range[0], range[1]);
+    } else {
+      throw new Error(`Unsupported schedule day segment: ${part}`);
+    }
+  });
+  return days;
+}
+
+function addImportedScheduleDayRange_(days, startToken, endToken) {
+  const week = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const startDay = parseImportedScheduleDay_(startToken);
+  const endDay = parseImportedScheduleDay_(endToken);
+  const startIndex = week.indexOf(startDay);
+  const endIndex = week.indexOf(endDay);
+  if (startIndex === -1 || endIndex === -1) throw new Error(`Unsupported schedule day range: ${startToken}-${endToken}`);
+  let cursor = startIndex;
+  while (true) {
+    if (days.indexOf(week[cursor]) === -1) days.push(week[cursor]);
+    if (cursor === endIndex) break;
+    cursor = (cursor + 1) % week.length;
+  }
+}
+
+function addImportedScheduleDay_(days, token) {
+  const day = parseImportedScheduleDay_(token);
+  if (days.indexOf(day) === -1) days.push(day);
+}
+
+function parseImportedScheduleDay_(token) {
+  const key = String(token || '').trim().toLowerCase();
+  const mapping = {
+    m: 'Mon',
+    mon: 'Mon',
+    monday: 'Mon',
+    t: 'Tue',
+    tu: 'Tue',
+    tue: 'Tue',
+    tues: 'Tue',
+    tuesday: 'Tue',
+    w: 'Wed',
+    wed: 'Wed',
+    wednesday: 'Wed',
+    th: 'Thu',
+    thu: 'Thu',
+    thur: 'Thu',
+    thurs: 'Thu',
+    thursday: 'Thu',
+    f: 'Fri',
+    fri: 'Fri',
+    friday: 'Fri',
+    sat: 'Sat',
+    saturday: 'Sat',
+    sun: 'Sun',
+    sunday: 'Sun'
+  };
+  if (!mapping[key]) throw new Error(`Unsupported schedule day token: ${token}`);
+  return mapping[key];
+}
+
+function buildRealTimesheetClockEventRows_(entries, codeMap) {
+  const rows = [];
+  entries.forEach(entry => {
+    const mapped = codeMap[entry.employeeKey];
+    if (!mapped) return;
+    const code = mapped.code;
+    const events = [];
+    if (entry.firstIn) {
+      events.push({
+        timestamp: makeDateAtImportedTime_(entry.date, entry.firstIn),
+        type: 'CLOCK_IN'
+      });
+    }
+    addRealTimesheetIntervalEvents_(events, entry.date, entry.intervals);
+    if (entry.lastOut) {
+      events.push({
+        timestamp: makeDateAtImportedTime_(entry.date, entry.lastOut),
+        type: 'CLOCK_OUT'
+      });
+    }
+    events.sort(compareClockImportEvents_);
+    events.forEach((event, index) => {
+      rows.push([
+        `${CONFIG.realTimesheetEventIdPrefix}${formatCompactDate_(entry.date)}-${code}-${pad2_(index + 1)}-${event.type}`,
+        event.timestamp,
+        code,
+        event.type,
+        'IMPORTED',
+        'Raw timesheet CSV',
+        `${CONFIG.realTimesheetImportMarker}: ${entry.fullName}${entry.memberCode ? ` (${entry.memberCode})` : ''}, CSV row ${entry.rowNumber}.`,
+        '',
+        ''
+      ]);
+    });
+  });
+  return rows.sort((a, b) => {
+    const aDate = parseDateOrBlank_(a[1]);
+    const bDate = parseDateOrBlank_(b[1]);
+    return (aDate ? aDate.getTime() : 0) - (bDate ? bDate.getTime() : 0);
+  });
+}
+
+function addRealTimesheetIntervalEvents_(events, date, intervals) {
+  const lunchIntervals = intervals.filter(interval => interval.role === 'lunch');
+  const primaryLunch = lunchIntervals.length
+    ? lunchIntervals.slice().sort((a, b) => b.durationMinutes - a.durationMinutes)[0]
+    : null;
+  intervals.forEach(interval => {
+    const isLunch = primaryLunch && interval === primaryLunch;
+    events.push({
+      timestamp: makeDateAtImportedTime_(date, interval.start),
+      type: isLunch ? 'LUNCH_START' : 'BREAK_START'
+    });
+    events.push({
+      timestamp: makeDateAtImportedTime_(date, interval.end),
+      type: isLunch ? 'LUNCH_END' : 'BREAK_END'
+    });
+  });
+}
+
+function compareClockImportEvents_(a, b) {
+  const diff = a.timestamp.getTime() - b.timestamp.getTime();
+  if (diff !== 0) return diff;
+  const order = {
+    CLOCK_IN: 1,
+    LUNCH_START: 2,
+    BREAK_START: 2,
+    LUNCH_END: 3,
+    BREAK_END: 3,
+    CLOCK_OUT: 4
+  };
+  return (order[a.type] || 9) - (order[b.type] || 9);
+}
+
+function collectRealTimesheetIntervals_(row, rowNumber) {
+  const intervals = [];
+  TIMESHEET_IMPORT_INTERVAL_SPECS.forEach(spec => {
+    const startValue = cleanImportCell_(row[spec.startIndex]);
+    const endValue = cleanImportCell_(row[spec.endIndex]);
+    if (!startValue && !endValue) return;
+    if (!startValue || !endValue) {
+      throw new Error(`Row ${rowNumber} has an incomplete ${spec.label} interval.`);
+    }
+    const start = parseRealTimesheetTime_(startValue, rowNumber, `${spec.label} Start`);
+    const end = parseRealTimesheetTime_(endValue, rowNumber, `${spec.label} End`);
+    intervals.push({
+      role: spec.role,
+      label: spec.label,
+      start,
+      end,
+      durationMinutes: getImportedTimeDurationMinutes_(start, end)
+    });
+  });
+  return intervals;
+}
+
+function removeRealTimesheetClockEvents_(sheet) {
+  return deleteRowsMatching_(sheet, function(row) {
+    const eventId = String(row['Event ID'] || '');
+    const notes = String(row.Notes || '');
+    return eventId.indexOf(CONFIG.realTimesheetEventIdPrefix) === 0
+      || notes.indexOf(CONFIG.realTimesheetImportMarker) !== -1;
+  });
+}
+
+function removeRealTimesheetScheduleRows_(sheet, employeeCodes, startDate, endDate) {
+  const codeSet = {};
+  employeeCodes.forEach(code => {
+    codeSet[normalizeCode_(code)] = true;
+  });
+  const startKey = formatDateKey_(startDate);
+  const endKey = formatDateKey_(endDate);
+  return deleteRowsMatching_(sheet, function(row) {
+    const code = normalizeCode_(row['Employee Code']);
+    return codeSet[code]
+      && formatDateKey_(row['Effective From']) === startKey
+      && formatDateKey_(row['Effective To']) === endKey;
+  });
+}
+
+function removePhase1TestPayrollData_(payroll) {
+  const periodId = PHASE1_TEST.periodId;
+  const periodsRemoved = deleteRowsMatching_(getSheet_(payroll, CONFIG.payrollTabs.periods), function(row) {
+    return normalizePeriodId_(row['Period ID']) === periodId;
+  });
+  const calculationRowsRemoved = deleteRowsMatching_(getSheet_(payroll, CONFIG.payrollTabs.calculations), function(row) {
+    return normalizePeriodId_(row['Period ID']) === periodId;
+  });
+  const outputRowsRemoved = deleteRowsMatching_(getSheet_(payroll, CONFIG.payrollTabs.output), function(row) {
+    return String(row.Period || '').indexOf(periodId) !== -1;
+  });
+  return {
+    periodsRemoved,
+    calculationRowsRemoved,
+    outputRowsRemoved
+  };
+}
+
+function ensureRealTimesheetPayPeriod_(payroll, startDate, endDate) {
+  const sheet = getSheet_(payroll, CONFIG.payrollTabs.periods);
+  repairPayPeriodIds_(payroll);
+  const period = getRealTimesheetPayPeriodDefinition_(startDate, endDate);
+  if (!period) {
+    throw new Error('Payroll calculation skipped because the import spans multiple or partial pay periods. Attendance was rebuilt; calculate each pay period from the Payroll menu.');
+  }
+  const existing = readObjects_(sheet)
+    .filter(row => normalizePeriodId_(row['Period ID']) === period.periodId)[0];
+  if (!existing) {
+    appendRows_(sheet, [[
+      period.periodId,
+      period.payDate,
+      dateOnly_(startDate),
+      dateOnly_(endDate),
+      period.periodType,
+      'Open'
+    ]]);
+  }
+  applyPayrollSheetFormatting_(payroll, CONFIG.payrollTabs.periods);
+  return period.periodId;
+}
+
+function getRealTimesheetPayPeriodDefinition_(startDate, endDate) {
+  const start = dateOnly_(startDate);
+  const end = dateOnly_(endDate);
+  if (start.getDate() === 1 && end.getDate() === 15 && start.getFullYear() === end.getFullYear() && start.getMonth() === end.getMonth()) {
+    return {
+      periodId: `${start.getFullYear()}-${pad2_(start.getMonth() + 1)}-EOM`,
+      payDate: new Date(start.getFullYear(), start.getMonth() + 1, 0),
+      periodType: 'EOM'
+    };
+  }
+  const monthEnd = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+  if (start.getDate() === 16 && end.getTime() === monthEnd.getTime()) {
+    const payDate = new Date(start.getFullYear(), start.getMonth() + 1, 15);
+    return {
+      periodId: `${payDate.getFullYear()}-${pad2_(payDate.getMonth() + 1)}-15`,
+      payDate,
+      periodType: 'Mid'
+    };
+  }
+  return null;
+}
+
+function deleteRowsMatching_(sheet, predicate) {
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return 0;
+  const headers = values[0];
+  let removed = 0;
+  for (let rowIndex = values.length - 1; rowIndex >= 1; rowIndex -= 1) {
+    const rowObject = {};
+    headers.forEach((header, columnIndex) => {
+      rowObject[header] = values[rowIndex][columnIndex];
+    });
+    if (predicate(rowObject, values[rowIndex], rowIndex + 1)) {
+      sheet.deleteRow(rowIndex + 1);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+function parseRealTimesheetDate_(value, rowNumber) {
+  const text = cleanImportCell_(value);
+  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) throw new Error(`Row ${rowNumber} has an invalid Date value: ${text || '(blank)'}.`);
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const year = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+    throw new Error(`Row ${rowNumber} has an invalid Date value: ${text}.`);
+  }
+  return date;
+}
+
+function parseRealTimesheetTimeOrBlank_(value, rowNumber, fieldName) {
+  const text = cleanImportCell_(value);
+  return text ? parseRealTimesheetTime_(text, rowNumber, fieldName) : null;
+}
+
+function parseRealTimesheetTime_(value, rowNumber, fieldName) {
+  const text = cleanImportCell_(value);
+  const match = text.match(/^(\d{1,2}):(\d{2})\s*([aApP][mM])$/);
+  if (!match) throw new Error(`Row ${rowNumber} has an invalid ${fieldName} time: ${text || '(blank)'}.`);
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const suffix = match[3].toLowerCase();
+  if (hours < 1 || hours > 12 || minutes < 0 || minutes > 59) {
+    throw new Error(`Row ${rowNumber} has an invalid ${fieldName} time: ${text}.`);
+  }
+  if (suffix === 'pm' && hours !== 12) hours += 12;
+  if (suffix === 'am' && hours === 12) hours = 0;
+  return { hours, minutes };
+}
+
+function makeDateAtImportedTime_(date, time) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), time.hours, time.minutes, 0, 0);
+}
+
+function getImportedTimeDurationMinutes_(start, end) {
+  let startMinutes = start.hours * 60 + start.minutes;
+  let endMinutes = end.hours * 60 + end.minutes;
+  if (endMinutes < startMinutes) endMinutes += 24 * 60;
+  return endMinutes - startMinutes;
+}
+
+function cleanImportCell_(value) {
+  const text = String(value === null || value === undefined ? '' : value).trim();
+  if (!text || text === "'-" || text === '-') return '';
+  return text;
+}
+
+function getRealTimesheetEmployeeKey_(fullName, memberCode) {
+  return `${normalizeImportedName_(fullName)}|${normalizeCode_(memberCode)}`;
+}
+
+function normalizeImportedName_(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 function onOpen(e) {
@@ -528,7 +1320,7 @@ function addAttendanceMenu_() {
     .addItem('Open Clock-In Web App URL', 'showClockAppUrl')
     .addItem('Set Portal Admin Access Key...', 'setPortalAdminAccessKeyFromMenu')
     .addItem('Create Workflow Instructions Tabs', 'createWorkflowInstructionsTabsFromMenu')
-    .addItem('Inject Phase 1 Test Data', 'injectPhase1TestDataFromMenu')
+    .addItem('Import Real Timesheet CSV...', 'showTimesheetImportDialog')
     .addSeparator()
     .addItem('Add Clock Event Manually...', 'showAddClockEventDialog')
     .addItem('Edit Attendance Log Entry...', 'showEditAttendanceLogDialog')
@@ -553,7 +1345,7 @@ function addPayrollMenu_() {
     .addItem('Set Portal Admin Access Key...', 'setPortalAdminAccessKeyFromMenu')
     .addSeparator()
     .addItem('Create Workflow Instructions Tabs', 'createWorkflowInstructionsTabsFromMenu')
-    .addItem('Inject Phase 1 Test Data', 'injectPhase1TestDataFromMenu')
+    .addItem('Import Real Timesheet CSV...', 'showTimesheetImportDialog')
     .addSeparator()
     .addItem('Calculate Pay Period...', 'showCalculatePayPeriodDialog')
     .addItem('Refresh Attendance Data', 'refreshAttendanceDataFromMenu')
@@ -623,15 +1415,16 @@ function createWorkflowInstructionsTabsFromMenu() {
 }
 
 function injectPhase1TestDataFromMenu() {
-  const result = injectPhase1TestData();
-  const warningText = result.payrollWarnings.length
-    ? `\n\nWarnings:\n${result.payrollWarnings.join('\n')}`
-    : '';
   SpreadsheetApp.getUi().alert(
-    'Phase 1 Test Data',
-    `${result.eventsAdded} clock events added for ${result.periodId}. ${result.attendanceRowsWritten} attendance rows rebuilt.${warningText}`,
+    'Phase 1 Test Data Retired',
+    'Use Attendance > Import Real Timesheet CSV to load the real migration sample.',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
+}
+
+function showTimesheetImportDialog() {
+  const html = HtmlService.createHtmlOutputFromFile('TimesheetImportDialog').setWidth(760).setHeight(680);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Import Real Timesheet CSV');
 }
 
 function showAddEmployeeDialog() {
@@ -4022,14 +4815,14 @@ function getAttendanceWorkflowGuide_() {
       },
       {
         eyebrow: 'SECTION 04',
-        title: 'Phase 1 Test Scenario',
-        description: 'Run injectPhase1TestData() to populate a compact scenario that exercises the main edge cases.',
-        headers: ['Employee', 'PIN', 'Scenario', 'Expected Review', 'Workbook Impact', 'Notes'],
+        title: 'Real Timesheet Import',
+        description: 'Use Attendance > Import Real Timesheet CSV for the one-time migration sample instead of synthetic clock data.',
+        headers: ['Source', 'Target', 'Action', 'Expected Review', 'Workbook Impact', 'Notes'],
         rows: [
-          ['MARK', PHASE1_TEST.pins.MARK, 'Late on 2026-04-08.', 'Late minutes should appear; Late Deduction stays 0.', 'Attendance Log and Payroll Calculations', 'Tests late tracking for attendance bonus without base-pay deduction.'],
-          ['PAUL', PHASE1_TEST.pins.PAUL, 'Absent on scheduled Saturday 2026-04-04.', 'Absent day and deduction should appear.', 'Attendance Log and Payroll Calculations', 'No clock events are inserted for that day.'],
-          ['ANDREA', PHASE1_TEST.pins.ANDREA, 'Short day on 2026-04-10.', 'Short hours deduction should appear.', 'Attendance Log and Payroll Calculations', 'Clock-out is before scheduled end.'],
-          ['CHARISSE', PHASE1_TEST.pins.CHARISSE, 'Missing clock-out on 2026-04-14.', 'Payroll row should need review.', 'Attendance Log and Payroll Output', 'Calculated total remains blank until resolved.']
+          ['Raw CSV export', 'Clock Events', 'Import appends deterministic REAL-TS event IDs and removes prior imported rows first.', 'Clock events sort by timestamp and retain CSV row provenance.', 'Clock Events and Attendance Log', 'Production clock events are not deleted.'],
+          ['Work Schedule column', 'Work Schedules', 'Import adds effective-dated schedule rows only for the imported date window.', 'Schedules match the historical export while current schedules remain untouched.', 'Work Schedules', 'Scheduled lunch is left blank because the source schedule does not define a fixed lunch window.'],
+          ['Employee names', 'Employees', 'Existing employee rows are reused by name; missing employees are added with source member code notes.', 'New rows are visible before payroll calculation warnings are reviewed.', 'Employees and Compensation Master', 'New compensation rows are blank by design until payroll confirms real values.'],
+          ['Phase 1 fake data', 'Payroll and attendance tabs', 'Import can remove the old PHASE1_TEST_DATA rows and test pay period.', 'Real April 2026 rows replace the synthetic scenario.', 'Clock Events, Pay Periods, Payroll Output', 'Use the importer rather than injectPhase1TestData() for migration testing.']
         ]
       }
     ]
@@ -4131,14 +4924,14 @@ function getPayrollWorkflowGuide_() {
       },
       {
         eyebrow: 'SECTION 06',
-        title: 'Phase 1 Test Scenario',
-        description: 'Run injectPhase1TestData() to create a private test pay period without using a production period ID.',
+        title: 'Migration Test Data',
+        description: 'Use real imported timesheet rows for payroll testing once the CSV migration has been loaded from the Attendance menu.',
         headers: ['Period ID', 'Employee Set', 'Expected Warning', 'Review Tab', 'Status', 'Notes'],
         rows: [
-          [PHASE1_TEST.periodId, PHASE1_TEST.employeeCodes.join(', '), 'MARK late minutes.', 'Payroll Calculations', 'Calculated', 'Tests late-minute tracking for attendance bonus without base-pay deduction.'],
-          [PHASE1_TEST.periodId, PHASE1_TEST.employeeCodes.join(', '), 'PAUL absent day.', 'Payroll Calculations', 'Calculated', 'Tests absence deduction math.'],
-          [PHASE1_TEST.periodId, PHASE1_TEST.employeeCodes.join(', '), 'ANDREA short hours.', 'Payroll Calculations', 'Calculated', 'Tests short-hours deduction math.'],
-          [PHASE1_TEST.periodId, PHASE1_TEST.employeeCodes.join(', '), 'CHARISSE incomplete day.', 'Payroll Output', 'Needs review', 'Total remains blank until attendance is corrected.']
+          ['2026-04-EOM', 'Imported April 1-15 employees', 'Missing compensation for newly imported employees until real terms are entered.', 'Payroll Calculations', 'Needs review where comp is blank', 'Expected during migration testing.'],
+          ['2026-04-EOM', 'Imported April 1-15 employees', 'Incomplete days where the source CSV has no last-out timestamp.', 'Payroll Output', 'Needs review', 'Resolve only after the source record is confirmed.'],
+          ['2026-04-EOM', 'Imported April 1-15 employees', 'Short hours and absent days come from the imported clock sequence and historical schedules.', 'Payroll Calculations', 'Calculated or Needs review', 'Use this to validate payroll math against real behavior.'],
+          ['2026-04-EOM', 'Imported April 1-15 employees', 'Prior PHASE1_TEST_DATA rows are removed by the importer when the cleanup checkbox is selected.', 'Clock Events and Pay Periods', 'Real-data baseline', 'Synthetic test menus are no longer exposed.']
         ]
       }
     ]
